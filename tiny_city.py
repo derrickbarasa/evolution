@@ -6,6 +6,7 @@ Leave your computer alone and watch an empty patch of wilderness grow into
 huts, farms, castles, factories, skyscrapers and finally a green future city
 full of electric cars, drones, solar towers and maglev trains.
 Move the mouse or press any key to come back.
+The city is saved when you return and picks up where it left off next time.
 
     pip install pygame
 
@@ -14,10 +15,12 @@ Move the mouse or press any key to come back.
     python tiny_city.py --fast          every era lasts 15 seconds (demo)
     python tiny_city.py --watch         sit in the background, start after 5 idle minutes
     python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
+    python tiny_city.py --new           forget the saved city and start from wilderness
 """
 import argparse
 import math
 import os
+import pickle
 import platform
 import random
 import subprocess
@@ -1063,6 +1066,39 @@ class World:
             draw_flyer(s, f, t)
 
 
+# ----------------------------------------------------------------- saving
+def save_path():
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "TinyCity", "city.sav")
+
+
+def save_world(world):
+    """Write the city to disk so the next idle session carries on from here."""
+    path = save_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "wb") as f:
+            pickle.dump({"version": 1, "lw": LW, "world": world}, f)
+        os.replace(path + ".tmp", path)
+    except Exception:
+        pass
+
+
+def load_world(lw, era_seconds):
+    """The saved city if it fits this screen shape (within 15%), else None."""
+    try:
+        with open(save_path(), "rb") as f:
+            data = pickle.load(f)
+        if data.get("version") != 1 or abs(data["lw"] - lw) > lw * 0.15:
+            return None
+        world, saved_lw = data["world"], data["lw"]
+    except Exception:
+        return None
+    world.t = world.era_f * era_seconds     # keep the same era if --era-minutes changed
+    world.era_seconds = era_seconds
+    return world, saved_lw
+
+
 # ----------------------------------------------------------------- run modes
 def run(args):
     global LW
@@ -1075,16 +1111,24 @@ def run(args):
     pygame.display.set_caption("Tiny City")
     sw, sh_ = screen.get_size()
     LW = max(320, int(round(LH * sw / sh_)))
-    world = World(args.era_minutes * 60)
+    saved = None if args.new else load_world(LW, args.era_minutes * 60)
+    if saved:
+        world, LW = saved
+    else:
+        world = World(args.era_minutes * 60)
     canvas = pygame.Surface((LW, LH))
     clock = pygame.time.Clock()
     started = time.time()
+    last_save = started
     pygame.event.clear()
     start_mouse = pygame.mouse.get_pos()
 
     running = True
     while running:
         dt = min(clock.tick(30) / 1000.0, 0.1)
+        if time.time() - last_save > 30:
+            save_world(world)
+            last_save = time.time()
         settled = time.time() - started > 1.5
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -1106,6 +1150,7 @@ def run(args):
         world.draw(canvas)
         pygame.transform.scale(canvas, screen.get_size(), screen)
         pygame.display.flip()
+    save_world(world)
     pygame.quit()
 
 
@@ -1167,6 +1212,7 @@ def main():
     ap.add_argument("--era-minutes", type=float, default=1.5, help="how long each era lasts (default 1.5)")
     ap.add_argument("--fast", action="store_true", help="demo speed: 15 seconds per era")
     ap.add_argument("--window", action="store_true", help="run in a window for testing")
+    ap.add_argument("--new", action="store_true", help="forget the saved city and start from wilderness")
     ap.add_argument("--away-offset", type=float, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.fast:
