@@ -16,8 +16,10 @@ The city is saved when you return and picks up where it left off next time.
     python tiny_city.py --watch         sit in the background, start after 5 idle minutes
     python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
     python tiny_city.py --new           forget the saved city and start from wilderness
+    python tiny_city.py --settings      choose the era length (also the screen saver's Settings button)
 """
 import argparse
+import json
 import math
 import os
 import pickle
@@ -1067,9 +1069,9 @@ class World:
 
 
 # ----------------------------------------------------------------- saving
-def save_path():
+def save_path(name="city.sav"):
     base = os.environ.get("APPDATA") or os.path.expanduser("~")
-    return os.path.join(base, "TinyCity", "city.sav")
+    return os.path.join(base, "TinyCity", name)
 
 
 def save_world(world):
@@ -1097,6 +1099,127 @@ def load_world(lw, era_seconds):
     world.t = world.era_f * era_seconds     # keep the same era if --era-minutes changed
     world.era_seconds = era_seconds
     return world, saved_lw
+
+
+def saved_city_summary():
+    """One line about the saved city, or None if there isn't one."""
+    try:
+        with open(save_path(), "rb") as f:
+            world = pickle.load(f)["world"]
+    except Exception:
+        return None
+    return f"{ERAS[int(world.era_f)]}, year {fmt_year(world.year())}"
+
+
+def load_settings():
+    try:
+        with open(save_path("settings.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def save_settings(settings):
+    path = save_path("settings.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings, f, indent=2)
+
+
+# ----------------------------------------------------------------- settings window
+ERA_CHOICES = [("15 seconds", 0.25), ("30 seconds", 0.5), ("1 minute", 1), ("1.5 minutes", 1.5),
+               ("3 minutes", 3), ("5 minutes", 5), ("10 minutes", 10), ("30 minutes", 30),
+               ("1 hour", 60), ("3 hours", 180)]
+
+
+def fmt_minutes(m):
+    if m < 1:
+        return f"{round(m * 60)} seconds"
+    if m < 90:
+        return f"{m:g} minutes"
+    return f"{m / 60:g} hours"
+
+
+def configure():
+    """The window behind the Settings button in Windows' screen saver dialog."""
+    import tkinter as tk
+    from tkinter import messagebox, ttk
+
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)     # crisp text on high-DPI screens
+    except Exception:
+        pass
+
+    settings = load_settings()
+    current = settings.get("era_minutes", 1.5)
+    labels = [label for label, _ in ERA_CHOICES]
+    minutes = dict(ERA_CHOICES)
+    closest = min(ERA_CHOICES, key=lambda c: abs(c[1] - current))[0]
+
+    root = tk.Tk()
+    root.title("Tiny City Settings")
+    root.resizable(False, False)
+    frame = ttk.Frame(root, padding=18)
+    frame.grid(sticky="nsew")
+    frame.columnconfigure(1, weight=1)
+
+    ttk.Label(frame, text="Tiny City", font=("Segoe UI", 15, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+    ttk.Label(frame, text="Civilisation grows while you're away.").grid(row=1, column=0, columnspan=2,
+                                                                         sticky="w", pady=(0, 14))
+
+    ttk.Label(frame, text="Each era lasts").grid(row=2, column=0, sticky="w")
+    era = tk.StringVar(value=closest)
+    ttk.Combobox(frame, textvariable=era, values=labels, state="readonly", width=14).grid(
+        row=2, column=1, sticky="e", padx=(16, 0))
+    total = ttk.Label(frame, foreground="#666")
+    total.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 14))
+
+    def show_total(*_):
+        total.config(text=f"Green Future after about {fmt_minutes(minutes[era.get()] * (len(ERAS) - 1))} of idle time.")
+    era.trace_add("write", show_total)
+    show_total()
+
+    city_box = ttk.LabelFrame(frame, text="Your city", padding=10)
+    city_box.grid(row=4, column=0, columnspan=2, sticky="ew")
+    city_box.columnconfigure(0, weight=1)
+    city = ttk.Label(city_box)
+    city.grid(row=0, column=0, sticky="w")
+
+    def show_city():
+        city.config(text=saved_city_summary() or "Wilderness. Nothing built yet.")
+
+    def new_city():
+        if messagebox.askyesno("Start a new city", "Forget your city and start again from wilderness?", parent=root):
+            try:
+                os.remove(save_path())
+            except OSError:
+                pass
+            show_city()
+    ttk.Button(city_box, text="Start a new city", command=new_city).grid(row=0, column=1, padx=(16, 0))
+    show_city()
+
+    def ok(*_):
+        settings["era_minutes"] = minutes[era.get()]
+        try:
+            save_settings(settings)
+        except OSError as e:
+            messagebox.showerror("Tiny City", f"Couldn't save settings:\n{e}", parent=root)
+            return
+        root.destroy()
+
+    buttons = ttk.Frame(frame)
+    buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
+    ttk.Button(buttons, text="OK", command=ok, default="active").grid(row=0, column=0)
+    ttk.Button(buttons, text="Cancel", command=root.destroy).grid(row=0, column=1, padx=(8, 0))
+    root.bind("<Return>", ok)
+    root.bind("<Escape>", lambda e: root.destroy())
+
+    root.update_idletasks()
+    x = (root.winfo_screenwidth() - root.winfo_width()) // 2
+    y = (root.winfo_screenheight() - root.winfo_height()) // 3
+    root.geometry(f"+{x}+{y}")
+    root.mainloop()
 
 
 # ----------------------------------------------------------------- run modes
@@ -1202,14 +1325,18 @@ def watch(args):
 def main():
     argv = sys.argv[1:]
     # Windows screensaver (.scr) arguments
-    if argv and argv[0][:2].lower() in ("/p", "/c"):
+    if argv and argv[0][:2].lower() == "/p":
         return
+    if argv and argv[0][:2].lower() == "/c":
+        argv = ["--settings"]
     if argv and argv[0][:2].lower() == "/s":
         argv = []
     ap = argparse.ArgumentParser(description="Tiny City: an idle screen where civilisation evolves while you're away.")
     ap.add_argument("--watch", action="store_true", help="wait in the background and start when the computer is idle")
     ap.add_argument("--idle-minutes", type=float, default=5, help="idle minutes before starting (with --watch)")
-    ap.add_argument("--era-minutes", type=float, default=1.5, help="how long each era lasts (default 1.5)")
+    ap.add_argument("--era-minutes", type=float, default=load_settings().get("era_minutes", 1.5),
+                    help="how long each era lasts (default: from the settings window, else 1.5)")
+    ap.add_argument("--settings", action="store_true", help="open the settings window")
     ap.add_argument("--fast", action="store_true", help="demo speed: 15 seconds per era")
     ap.add_argument("--window", action="store_true", help="run in a window for testing")
     ap.add_argument("--new", action="store_true", help="forget the saved city and start from wilderness")
@@ -1217,7 +1344,9 @@ def main():
     args = ap.parse_args(argv)
     if args.fast:
         args.era_minutes = 0.25
-    if args.watch:
+    if args.settings:
+        configure()
+    elif args.watch:
         watch(args)
     else:
         run(args)
