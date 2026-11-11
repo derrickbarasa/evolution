@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""
-TINY CITY - an idle screen where civilisation evolves while you're away.
-
-Leave your computer alone and watch an empty patch of wilderness grow into
-huts, farms, castles, factories, skyscrapers and finally a green future city
-full of electric cars, drones, solar towers and maglev trains.
-Move the mouse or press any key to come back.
-The city is saved when you return and picks up where it left off next time.
-With several monitors it stretches across all of them as one wide city.
-
-    pip install pygame
-
-    python tiny_city.py                 start now, full screen
-    python tiny_city.py --window        windowed test mode (Esc quits, Right arrow skips an era)
-    python tiny_city.py --fast          every era lasts 15 seconds (demo)
-    python tiny_city.py --watch         sit in the background, start after 5 idle minutes
-    python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
-    python tiny_city.py --new           forget the saved city and start from wilderness
-    python tiny_city.py --settings      choose the era length (also the screen saver's Settings button)
-"""
+"""TINY CITY - an idle screen where civilisation evolves while you're away. See README.md."""
 import argparse
 import glob
 import json
