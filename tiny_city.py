@@ -76,6 +76,9 @@ WEATHER = [         # chance of each kind of weather in spring, summer, autumn, 
 CLOUD = {"clear": 0.0, "cloudy": 0.6, "rain": 0.8, "storm": 1.0, "snow": 0.7}
 PRECIP = {"clear": 0.0, "cloudy": 0.0, "rain": 0.6, "storm": 1.0, "snow": 0.7}
 AUTUMN_COLORS = [(215, 120, 40), (190, 65, 40), (225, 180, 60)]
+FIREWORK_COLORS = [(255, 90, 90), (255, 220, 90), (120, 200, 255), (150, 255, 150), (240, 130, 255), (255, 255, 255)]
+BUNTING_COLORS = [(220, 60, 60), (240, 200, 60), (60, 120, 210), (70, 170, 90), (230, 230, 230)]
+BALLOON_COLORS = [(220, 60, 60), (240, 190, 40), (60, 120, 200), (80, 170, 90), (230, 120, 40)]
 SNOW_COLOR = (232, 237, 243)
 
 NIGHT = 0.0         # 0 = full day, 1 = full night (set every frame)
@@ -726,6 +729,19 @@ def draw_flyer(s, f, t):
         P(8, -1, 2, 1, mix((60, 160, 255), (160, 240, 255), (t * 5 + 0.5) % 1))
         P(0, 0, 11, 2, sh(f["color"]))
         P(2, 2, 6, 2, mix(sh((150, 190, 210)), (255, 230, 160), NIGHT * 0.6))
+    elif k == "balloon":
+        i = int(f["seed"])
+        a, b = BALLOON_COLORS[i % 5], BALLOON_COLORS[(i + 2) % 5]
+        pygame.draw.circle(s, sh(a), (x, y - 10), 6)
+        for dx in (-3, 0, 3):
+            s.fill(sh(b) if dx else sh(a), (x + dx, y - 15, 1, 10))
+        s.fill(sh(a), (x - 2, y - 5, 5, 2))
+        rope = sh((90, 70, 50))
+        s.set_at((x - 2, y - 2), rope)
+        s.set_at((x + 2, y - 2), rope)
+        s.fill(sh((130, 90, 50)), (x - 2, y - 1, 5, 3))
+        if NIGHT > 0.3 and int(t * 5 + f["seed"]) % 3:
+            s.set_at((x, y - 4), (255, 190, 80))
 
 
 # ----------------------------------------------------------------- the world
@@ -755,14 +771,21 @@ class World:
         self.last_era = 0
         self.train_timer = 6.0
         self.init_weather()
+        self.init_events()
 
     def init_weather(self):
         self.weather, self.weather_timer = "clear", 30.0
         self.cloud = self.precip = self.snow = self.flash = 0.0
         self.drops, self.bolt = [], []      # drop: [x, y, vx, vy, kind, seed, lands_at_y]
 
-    def __setstate__(self, state):      # cities saved before there was weather
+    def init_events(self):
+        self.show = 0.0                     # seconds of fireworks left
+        self.festival, self.festival_timer = 0.0, 300.0
+        self.rockets, self.sparks = [], []  # rocket: [x, y, vy, colour]; spark: [x, y, vx, vy, age, life, colour]
+
+    def __setstate__(self, state):      # cities saved before there was weather or events
         self.init_weather()
+        self.init_events()
         self.__dict__.update(state)
 
     @property
@@ -815,6 +838,7 @@ class World:
         if era != self.last_era:
             self.last_era = era
             self.banner_t = 7.0
+            self.show = 12.0        # fireworks for the new era
         self.banner_t = max(0.0, self.banner_t - dt)
 
         # ---- the city grows
@@ -834,7 +858,7 @@ class World:
                     self.puff(min(p.x + p.w - 2, p.x + min(p.w - 4, 14) + 4), GROUND - 4, 0.6)
 
         # ---- traffic, walkers and wildlife
-        if rng.random() < dt * WALK_RATE[era]:
+        if rng.random() < dt * WALK_RATE[era] * (4 if self.festival > 0 else 1):
             d, x, v = self.spawn_side(2, SPEED["walker"])
             shirts = [(130, 90, 60), (110, 80, 50)] if era <= 2 else \
                      [(200, 60, 60), (60, 90, 200), (240, 200, 60), (80, 160, 90), (230, 230, 230), (160, 80, 180)]
@@ -920,11 +944,15 @@ class World:
             options += [("plane", 0.04)]
         if era == 7:
             options += [("drone", 0.15), ("flycar", 0.05), ("plane", 0.02)]
+        if era >= 4 and self.cloud < 0.4 and not any(f["kind"] == "balloon" for f in self.flyers):
+            options += [("balloon", 0.012)]
         for kind, r in options:
             if rng.random() < dt * r:
-                d, x, v = self.spawn_side(10, {"bird": 14, "biplane": 18, "plane": 30, "drone": 12, "flycar": 26}[kind])
+                d, x, v = self.spawn_side(10, {"bird": 14, "biplane": 18, "plane": 30, "drone": 12, "flycar": 26,
+                                               "balloon": 4}[kind])
                 y = {"bird": rng.uniform(40, 110), "biplane": rng.uniform(40, 80), "plane": rng.uniform(15, 45),
-                     "drone": rng.uniform(60, 150), "flycar": rng.uniform(55, 115)}[kind]
+                     "drone": rng.uniform(60, 150), "flycar": rng.uniform(55, 115),
+                     "balloon": rng.uniform(55, 110)}[kind]
                 n = rng.randint(3, 6) if kind == "bird" else 1
                 for i in range(n):
                     self.flyers.append(dict(kind=kind, x=x - i * 5 * d, y=y + (i % 2) * 3 + i, dir=d, v=v,
@@ -945,7 +973,46 @@ class World:
                 c[0], c[1] = -40, self.rng.uniform(15, 80)
 
         self.update_weather(dt)
+        self.update_events(dt, era)
         self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
+
+    def update_events(self, dt, era):
+        rng = self.rng
+        # ---- a town festival every so often, if the weather is fine
+        self.festival_timer -= dt
+        if self.festival > 0:
+            self.festival = max(0.0, self.festival - dt)
+        elif self.festival_timer <= 0:
+            if era >= 2 and self.weather in ("clear", "cloudy"):
+                self.festival = 50.0
+            self.festival_timer = rng.uniform(400, 800)
+
+        # ---- fireworks: a show for each new era, and festival nights from medieval times on
+        launch = 0.0
+        if self.show > 0:
+            self.show -= dt
+            launch = 2.5
+        elif self.festival > 0 and era >= 3 and NIGHT > 0.5:
+            launch = 0.6
+        if rng.random() < dt * launch:
+            self.rockets.append([rng.uniform(20, LW - 20), GROUND, rng.uniform(-115, -85), rng.choice(FIREWORK_COLORS)])
+        for r in self.rockets:
+            r[1] += r[2] * dt
+            r[2] += 45 * dt
+            if r[2] > -20:      # slowing down: burst
+                for _ in range(rng.randint(36, 56)):
+                    a, v = rng.uniform(0, math.tau), rng.uniform(20, 40)
+                    if len(self.sparks) < 800:
+                        self.sparks.append([r[0], r[1], math.cos(a) * v, math.sin(a) * v, 0.0,
+                                            rng.uniform(1.2, 2.0), r[3]])
+        self.rockets = [r for r in self.rockets if r[2] <= -20]
+        for sp in self.sparks:
+            sp[0] += sp[2] * dt
+            sp[1] += sp[3] * dt
+            sp[2] *= 1 - dt
+            sp[3] = sp[3] * (1 - dt) + 14 * dt
+            sp[4] += dt
+        self.sparks = [sp for sp in self.sparks if sp[4] < sp[5]]
 
     def update_weather(self, dt):
         rng, sf = self.rng, self.season_f
@@ -1156,6 +1223,23 @@ class World:
                 s.fill(pole, (lx, ROAD_TOP - 11, 3, 1))
                 s.fill(mix(sh((200, 200, 190)), (255, 230, 150), NIGHT), (lx + 2, ROAD_TOP - 10, 1, 1))
 
+        # festival bunting over the street, with lanterns at night
+        if self.festival > 0:
+            pole = sh((120, 90, 60) if era < 4 else (90, 90, 95))
+            string = sh((70, 60, 50))
+            for px in range(20, LW, 40):
+                s.fill(pole, (px, ROAD_TOP - 15, 1, 15))
+                for i in range(1, 40):
+                    xx = px + i
+                    yy = ROAD_TOP - 14 + int(math.sin(math.pi * i / 40) * 4)
+                    s.set_at((xx, yy), string)
+                    if i % 4 == 2:
+                        c = sh(BUNTING_COLORS[(xx // 4) % len(BUNTING_COLORS)])
+                        s.fill(c, (xx - 1, yy + 1, 3, 1))
+                        s.set_at((xx, yy + 2), c)
+                    elif i % 8 == 0 and NIGHT > 0.3:
+                        s.fill(mix(sh((200, 120, 60)), (255, 200, 110), NIGHT), (xx, yy + 1, 1, 2))
+
         for m in self.movers:
             draw_mover(s, m, t)
         for tr in self.trains:
@@ -1169,6 +1253,14 @@ class World:
             pygame.draw.circle(s, col, (int(pf[0]), int(pf[1])), int(1 + age * 3))
         for f in self.flyers:
             draw_flyer(s, f, t)
+        for x, y, _, _ in self.rockets:
+            s.fill((255, 235, 180), (int(x), int(y), 1, 2))
+        for x, y, vx, vy, age, life, col in self.sparks:
+            fade = age / life
+            if fade < 0.7 or int(t * 20 + x) % 2:       # twinkle as they die away
+                sky = mix(top, bot, clamp(y / GROUND))
+                s.set_at((int(x - vx * 0.06), int(y - vy * 0.06)), mix(col, sky, 0.5 + fade * 0.5))
+                s.set_at((int(x), int(y)), mix(col, sky, fade * fade))
 
         # weather on top of everything
         rain = mix((175, 190, 210), (70, 80, 100), NIGHT * 0.7)
