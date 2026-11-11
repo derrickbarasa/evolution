@@ -14,8 +14,9 @@ import time
 
 try:
     import pygame
+    from pygame._sdl2.video import Renderer, Texture, Window
 except ImportError:
-    sys.exit("Tiny City needs pygame:  pip install pygame")
+    sys.exit("Tiny City needs pygame 2:  pip install pygame")
 
 # ----------------------------------------------------------------- layout
 LH = 270            # pixel-art resolution height (width follows the screen shape)
@@ -66,6 +67,7 @@ OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
 EV_COLORS = [(240, 245, 250), (90, 200, 220), (120, 220, 150), (200, 205, 215), (250, 120, 160)]
 
 NIGHT = 0.0         # 0 = full day, 1 = full night (set every frame)
+SHADED = {}         # sh() results for this frame's NIGHT
 
 
 # ----------------------------------------------------------------- helpers
@@ -74,7 +76,7 @@ def clamp(v, a=0.0, b=1.0):
 
 
 def mix(c1, c2, t):
-    t = clamp(t)
+    t = 0.0 if t < 0.0 else 1.0 if t > 1.0 else t
     return (int(c1[0] + (c2[0] - c1[0]) * t),
             int(c1[1] + (c2[1] - c1[1]) * t),
             int(c1[2] + (c2[2] - c1[2]) * t))
@@ -87,7 +89,11 @@ def smooth(e0, e1, x):
 
 def sh(c, k=0.78):
     """Darken a colour as night falls."""
-    return mix(c, (c[0] * 0.2, c[1] * 0.22, c[2] * 0.36), NIGHT * k)
+    key = (c, k)
+    out = SHADED.get(key)
+    if out is None:
+        out = SHADED[key] = mix(c, (c[0] * 0.2, c[1] * 0.22, c[2] * 0.36), NIGHT * k)
+    return out
 
 
 def window_grid(s, x, top, w, h, R, day=(70, 90, 120), lit=(255, 214, 120),
@@ -908,6 +914,7 @@ class World:
         sun = math.sin(phase * math.tau)
         day = smooth(-0.12, 0.22, sun)
         NIGHT = 1.0 - day
+        SHADED.clear()
         dusk = clamp(1 - abs(sun) / 0.28)
         e0 = min(era + 1, len(SMOG) - 1)
         smog = SMOG[era] + (SMOG[e0] - SMOG[era]) * (ef - era)
@@ -992,9 +999,10 @@ class World:
             s.fill(sh((125, 98, 65)), (0, ROAD_BOT - 5, LW, 1))
         elif era == 4:
             s.fill(sh((120, 112, 102)), (0, ROAD_TOP, LW, road_h))
+            cobble = sh((100, 94, 88))
             for yy in range(ROAD_TOP + 1, ROAD_BOT, 3):
                 for xx in range((yy % 2) * 2, LW, 4):
-                    s.set_at((xx, yy), sh((100, 94, 88)))
+                    s.set_at((xx, yy), cobble)
         else:
             s.fill(sh((72, 72, 78) if era == 5 else (55, 56, 62)), (0, ROAD_TOP, LW, road_h))
             line = sh((230, 200, 80) if era == 5 else (235, 235, 235))
@@ -1239,6 +1247,25 @@ def monitor_rects():
         return None
 
 
+def on_battery():
+    """True when a laptop is running on battery (Windows only)."""
+    if platform.system() != "Windows":
+        return False
+    try:
+        import ctypes
+
+        class SYSTEM_POWER_STATUS(ctypes.Structure):
+            _fields_ = [("ACLineStatus", ctypes.c_ubyte), ("BatteryFlag", ctypes.c_ubyte),
+                        ("BatteryLifePercent", ctypes.c_ubyte), ("SystemStatusFlag", ctypes.c_ubyte),
+                        ("BatteryLifeTime", ctypes.c_ulong), ("BatteryFullLifeTime", ctypes.c_ulong)]
+        status = SYSTEM_POWER_STATUS()
+        if not ctypes.windll.kernel32.GetSystemPowerStatus(ctypes.byref(status)):
+            return False
+        return status.ACLineStatus == 0
+    except Exception:
+        return False
+
+
 def split_views(rects, lw=None):
     """One wide city across all screens: each screen shows the next slice, left to right.
     Returns the city width and a list of (slice of the canvas, place on the window)."""
@@ -1268,19 +1295,19 @@ def run(args):
         vw = max(r[0] + r[2] for r in rects) - vx
         vh = max(r[1] + r[3] for r in rects) - vy
         rects = [(x - vx, y - vy, w, h) for x, y, w, h in rects]
-        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{vx},{vy}"
     pygame.init()
+    # The graphics card scales the small pixel canvas up to the screen, which keeps the CPU (and battery) quiet.
     if args.window:
-        screen = pygame.display.set_mode((1280, 720))
+        win = Window("Tiny City", size=(1280, 720))
     elif rects and len(rects) > 1:
-        screen = pygame.display.set_mode((vw, vh), pygame.NOFRAME)
-        pygame.mouse.set_visible(False)
+        win = Window("Tiny City", size=(vw, vh), position=(vx, vy), borderless=True)
     else:
-        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        win = Window("Tiny City", fullscreen_desktop=True)
+    if not args.window:
         pygame.mouse.set_visible(False)
-    pygame.display.set_caption("Tiny City")
+    renderer = Renderer(win)
     if not rects or len(rects) == 1:
-        rects = [(0, 0) + screen.get_size()]
+        rects = [tuple(renderer.get_viewport())]
     LW, views = split_views(rects)
     saved = None if args.new else load_world(LW, args.era_minutes * 60)
     if saved:
@@ -1289,18 +1316,22 @@ def run(args):
     else:
         world = World(args.era_minutes * 60)
     canvas = pygame.Surface((LW, LH))
+    texture = Texture(renderer, (LW, LH), streaming=True)
+    texture.blend_mode = 0      # the canvas has no alpha; copy it as is
     clock = pygame.time.Clock()
     started = time.time()
     last_save = started
+    fps = 20 if on_battery() else 30
     pygame.event.clear()
     start_mouse = pygame.mouse.get_pos()
 
     running = True
     while running:
-        dt = min(clock.tick(30) / 1000.0, 0.1)
+        dt = min(clock.tick(fps) / 1000.0, 0.1)
         if time.time() - last_save > 30:
             save_world(world)
             last_save = time.time()
+            fps = 20 if on_battery() else 30
         settled = time.time() - started > 1.5
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -1320,10 +1351,14 @@ def run(args):
                 start_mouse = e.pos
         world.update(dt)
         world.draw(canvas)
+        texture.update(canvas)
+        renderer.draw_color = (0, 0, 0, 255)
+        renderer.clear()
         for src, dst in views:
-            pygame.transform.scale(canvas.subsurface(src), dst.size, screen.subsurface(dst))
-        pygame.display.flip()
+            texture.draw(srcrect=src, dstrect=dst)
+        renderer.present()
     save_world(world)
+    win.destroy()
     pygame.quit()
 
 

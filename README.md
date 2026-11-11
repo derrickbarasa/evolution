@@ -15,6 +15,8 @@ Leave your computer alone and an empty patch of wilderness slowly grows into hut
 | ![Industrial Age](docs/4-industrial-age.png) **Industrial Age**<br>Smokestacks and the first steam train. | ![Modern City](docs/5-modern-city.png) **Modern City**<br>Cars, apartment blocks, street lights. |
 | ![Metropolis](docs/6-metropolis.png) **Metropolis**<br>Skyscrapers, buses, planes. | ![Green Future](docs/7-green-future.png) **Green Future**<br>Vertical forests, drones, maglev trains. |
 
+It's light on your laptop: the graphics card does the scaling, and on battery it drops to 20 frames a second.
+
 With more than one monitor, the city stretches across all of them as one wide panorama, and cars and trains drive from one screen to the next.
 
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
