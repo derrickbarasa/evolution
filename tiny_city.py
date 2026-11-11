@@ -66,8 +66,23 @@ CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
 EV_COLORS = [(240, 245, 250), (90, 200, 220), (120, 220, 150), (200, 205, 215), (250, 120, 160)]
 
+SEASON_LEN = DAY_LEN * 3    # a year is 12 days
+WEATHER = [         # chance of each kind of weather in spring, summer, autumn, winter
+    {"clear": 0.45, "cloudy": 0.2, "rain": 0.3, "storm": 0.05},
+    {"clear": 0.6, "cloudy": 0.15, "rain": 0.1, "storm": 0.15},
+    {"clear": 0.35, "cloudy": 0.3, "rain": 0.3, "storm": 0.05},
+    {"clear": 0.35, "cloudy": 0.25, "snow": 0.4},
+]
+CLOUD = {"clear": 0.0, "cloudy": 0.6, "rain": 0.8, "storm": 1.0, "snow": 0.7}
+PRECIP = {"clear": 0.0, "cloudy": 0.0, "rain": 0.6, "storm": 1.0, "snow": 0.7}
+AUTUMN_COLORS = [(215, 120, 40), (190, 65, 40), (225, 180, 60)]
+SNOW_COLOR = (232, 237, 243)
+
 NIGHT = 0.0         # 0 = full day, 1 = full night (set every frame)
 SHADED = {}         # sh() results for this frame's NIGHT
+SNOW = 0.0          # how much snow lies on the ground, 0..1 (set every frame)
+AUTUMN = 0.0        # how autumn-coloured the leaves are, 0..1 (set every frame)
+BLOSSOM = 0.0       # spring blossom, 0..1 (set every frame)
 
 
 # ----------------------------------------------------------------- helpers
@@ -179,15 +194,28 @@ class Plot:
         return self.h + 14
 
 
+def leaf(c, x):
+    """Leaf colour for the season: pink blossom in spring, orange in autumn, snowy in winter."""
+    if BLOSSOM and x % 3 == 0:
+        c = mix(c, (240, 170, 200), BLOSSOM)
+    if AUTUMN:
+        c = mix(c, AUTUMN_COLORS[x % 3], AUTUMN)
+    if SNOW:
+        c = mix(c, SNOW_COLOR, SNOW * 0.6)
+    return c
+
+
 def pine(s, x, base, h):
     s.fill(sh((90, 60, 40)), (x, base - 3, 1, 3))
+    col = sh(mix((40, 110, 60), SNOW_COLOR, SNOW * 0.5))
     for i in range(3):
         top = base - h + i * h // 4
         bw = 2 + i * 2
-        pygame.draw.polygon(s, sh((40, 110, 60)), [(x, top), (x - bw, top + h // 3), (x + bw, top + h // 3)])
+        pygame.draw.polygon(s, col, [(x, top), (x - bw, top + h // 3), (x + bw, top + h // 3)])
 
 
 def round_tree(s, x, base, r, col=(60, 140, 70)):
+    col = leaf(col, x)
     s.fill(sh((100, 70, 45)), (x, base - 4, 1, 4))
     pygame.draw.circle(s, sh(col), (x, base - 3 - r), r)
     s.set_at((x - r // 2, base - 4 - r - r // 2), sh(mix(col, (255, 255, 200), 0.3)))
@@ -251,7 +279,7 @@ def draw_building(s, p, t):
         s.fill(mix(sh((60, 50, 40)), (255, 190, 100), NIGHT), (bx + bw - 6, top + 8, 3, 2))
 
     elif k == "field":
-        crop = (205, 175, 70) if R.random() < 0.5 else (95, 165, 60)
+        crop = mix((205, 175, 70) if R.random() < 0.5 else (95, 165, 60), SNOW_COLOR, SNOW)
         s.fill(sh((120, 90, 55)), (x, g - 2, w, 2))
         for xx in range(x + 1, x + w - 1, 2):
             sway = round(math.sin(t * 2 + xx * 0.5) * 0.7)
@@ -726,6 +754,21 @@ class World:
         self.banner_t = 7.0
         self.last_era = 0
         self.train_timer = 6.0
+        self.init_weather()
+
+    def init_weather(self):
+        self.weather, self.weather_timer = "clear", 30.0
+        self.cloud = self.precip = self.snow = self.flash = 0.0
+        self.drops, self.bolt = [], []      # drop: [x, y, vx, vy, kind, seed, lands_at_y]
+
+    def __setstate__(self, state):      # cities saved before there was weather
+        self.init_weather()
+        self.__dict__.update(state)
+
+    @property
+    def season_f(self):
+        """0 spring, 1 summer, 2 autumn, 3 winter; the fraction blends into the next."""
+        return (self.t / SEASON_LEN + 0.3) % 4
 
     def ridge(self, lo, hi, step):
         pts, y = [], self.rng.uniform(lo, hi)
@@ -901,11 +944,65 @@ class World:
             if c[0] > LW + 40:
                 c[0], c[1] = -40, self.rng.uniform(15, 80)
 
+        self.update_weather(dt)
         self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
+
+    def update_weather(self, dt):
+        rng, sf = self.rng, self.season_f
+        self.weather_timer -= dt
+        if self.weather_timer <= 0:
+            chances = WEATHER[int(sf)]
+            self.weather = rng.choices(list(chances), weights=list(chances.values()))[0]
+            self.weather_timer = rng.uniform(40, 120)
+        k = clamp(dt * 0.15)
+        self.cloud += (CLOUD[self.weather] - self.cloud) * k
+        self.precip += (PRECIP[self.weather] - self.precip) * k
+        snowing = self.weather == "snow"
+        if snowing:
+            self.snow = min(1.0, self.snow + dt * self.precip / 40)
+        elif sf < 2.9:      # thaw once winter is over
+            self.snow = max(0.0, self.snow - dt / 30)
+
+        # ---- rain, snowflakes and falling leaves
+        n = self.precip * (40 if snowing else 160) * LW / 480 * dt
+        while n > 0 and self.precip > 0.05 and len(self.drops) < 700:
+            if n < 1 and rng.random() > n:
+                break
+            n -= 1
+            x, lands = rng.uniform(-20, LW + 20), rng.uniform(GROUND, LH)
+            if snowing:
+                self.drops.append([x, -2, rng.uniform(-4, 4), rng.uniform(12, 22), "snow", rng.random() * 6, lands])
+            else:
+                self.drops.append([x, -4, -25, rng.uniform(190, 240), "rain", 0, lands])
+        leaf_fall = smooth(2.2, 2.5, sf) * (1 - smooth(2.9, 3.1, sf))
+        if leaf_fall and rng.random() < dt * leaf_fall * 4:
+            trees = [p for p in self.plots if p.kind == "nature"]
+            if trees:
+                p = rng.choice(trees)
+                self.drops.append([p.x + rng.uniform(0, p.w), GROUND - rng.uniform(6, 14), rng.uniform(-6, 6),
+                                   rng.uniform(5, 9), "leaf", rng.random() * 6, GROUND + rng.uniform(0, 3)])
+        for d in self.drops:
+            d[0] += d[2] * dt
+            if d[4] != "rain":
+                d[0] += math.sin(self.t * 2 + d[5]) * 6 * dt
+            d[1] += d[3] * dt
+        self.drops = [d for d in self.drops if d[1] < d[6]]
+
+        # ---- lightning
+        self.flash = max(0.0, self.flash - dt * 3)
+        if self.weather == "storm" and self.cloud > 0.8 and rng.random() < dt * 0.1:
+            self.flash = 1.0
+            x, y = rng.uniform(20, LW - 20), rng.uniform(20, 50)
+            end = rng.uniform(120, GROUND - 20)
+            self.bolt = [(x, y)]
+            while y < end:
+                x += rng.uniform(-8, 8)
+                y += rng.uniform(6, 14)
+                self.bolt.append((x, y))
 
     # ------------------------------------------------------------- drawing
     def draw(self, s, phase=None):
-        global NIGHT
+        global NIGHT, SNOW, AUTUMN, BLOSSOM
         t = self.t
         ef = self.era_f
         era = int(ef)
@@ -913,8 +1010,12 @@ class World:
             phase = (t / DAY_LEN + 0.28) % 1.0
         sun = math.sin(phase * math.tau)
         day = smooth(-0.12, 0.22, sun)
-        NIGHT = 1.0 - day
+        NIGHT = max(1.0 - day, self.cloud * 0.35)     # storms dim the town and some lights come on
         SHADED.clear()
+        sf = self.season_f
+        SNOW = self.snow
+        AUTUMN = smooth(1.8, 2.3, sf) * (1 - smooth(3.75, 3.98, sf))
+        BLOSSOM = smooth(0.0, 0.25, sf) * (1 - smooth(0.7, 1.0, sf))
         dusk = clamp(1 - abs(sun) / 0.28)
         e0 = min(era + 1, len(SMOG) - 1)
         smog = SMOG[era] + (SMOG[e0] - SMOG[era]) * (ef - era)
@@ -926,33 +1027,41 @@ class World:
         top = mix(top, (110, 90, 150), dusk * 0.35)
         top = mix(top, (150, 140, 120), smog * day)
         bot = mix(bot, (185, 170, 145), smog * day)
+        grey = mix((135, 140, 150), (25, 27, 36), 1.0 - day)
+        top = mix(top, grey, self.cloud * 0.8)
+        bot = mix(bot, mix(grey, (255, 255, 255), 0.15), self.cloud * 0.7)
         for y in range(GROUND):
             s.fill(mix(top, bot, y / GROUND), (0, y, LW, 1))
 
         if NIGHT > 0.25:
-            k = (NIGHT - 0.25) / 0.75 * (1 - smog)
+            k = (NIGHT - 0.25) / 0.75 * (1 - smog) * (1 - self.cloud)
             for sx, sy, b in self.stars:
                 tw = 0.6 + 0.4 * math.sin(t * 2 + sx)
                 s.set_at((sx, sy), mix(mix(top, bot, sy / GROUND), (255, 255, 235), k * b * tw))
 
-        if phase < 0.56:
+        if phase < 0.56 and self.cloud < 0.65:
             sx, sy = LW * phase / 0.5, 150 - sun * 125
             pygame.draw.circle(s, mix((255, 245, 190), (255, 170, 90), dusk), (int(sx), int(sy)), 7)
         mp = (phase + 0.5) % 1.0
-        if mp < 0.56:
-            mx, my = LW * mp / 0.5, 150 - math.sin(mp * math.tau) * 125
+        if mp < 0.56 and self.cloud < 0.65:
+            mx, my =LW * mp / 0.5, 150 - math.sin(mp * math.tau) * 125
             pygame.draw.circle(s, (230, 230, 215), (int(mx), int(my)), 5)
             s.set_at((int(mx) + 1, int(my) - 1), (200, 200, 190))
             s.set_at((int(mx) - 2, int(my) + 1), (205, 205, 195))
 
         cloud = mix(mix((255, 255, 255), (250, 190, 170), dusk * 0.6), (55, 58, 85), NIGHT)
         cloud = mix(cloud, (170, 160, 145), smog)
+        cloud = mix(cloud, mix((110, 115, 125), (35, 37, 48), 1.0 - day), self.cloud * 0.8)
+        puff = int(self.cloud * 3)
         for cx, cy, size, _ in self.clouds:
             for i in range(size):
-                pygame.draw.circle(s, cloud, (int(cx + i * 5), int(cy + (i % 2) * 2)), 4 + (i % 3))
+                pygame.draw.circle(s, cloud, (int(cx + i * 5), int(cy + (i % 2) * 2)), 4 + (i % 3) + puff)
 
         far_col = sh(mix(bot, (80, 100, 130), 0.55), 0.6)
+        far_col = mix(far_col, sh((215, 222, 230), 0.6), SNOW * 0.6)
         pygame.draw.polygon(s, far_col, self.far + [(LW + 40, GROUND), (-40, GROUND)])
+        if self.flash > 0.5 and self.bolt:
+            pygame.draw.lines(s, (255, 255, 225), False, self.bolt)
         if ef > 6.8:
             n = int(len(self.turbines) * clamp((ef - 6.8) * 2.5))
             for tx in self.turbines[:n]:
@@ -964,7 +1073,9 @@ class World:
                     pygame.draw.line(s, pole, (tx, ty - 16), (tx + math.cos(a) * 7, ty - 16 + math.sin(a) * 7))
                 if NIGHT > 0.4 and int(t + tx) % 2:
                     s.set_at((tx, ty - 17), (255, 50, 50))
-        near_col = sh(mix((80, 135, 75), (110, 120, 105), min(1, era / 7) * 0.5), 0.75)
+        near_col = mix((80, 135, 75), (110, 120, 105), min(1, era / 7) * 0.5)
+        near_col = mix(near_col, (145, 125, 65), AUTUMN * 0.35)
+        near_col = mix(sh(near_col, 0.75), sh((225, 230, 235), 0.75), SNOW * 0.85)
         pygame.draw.polygon(s, near_col, self.near + [(LW + 40, GROUND), (-40, GROUND)])
 
         # buildings
@@ -977,11 +1088,12 @@ class World:
                 draw_building(s, p, t)
 
         # sidewalk and road
-        grass = sh((95, 150, 70))
+        grass = mix(sh(mix((95, 150, 70), (150, 145, 70), AUTUMN * 0.4)), sh(SNOW_COLOR), SNOW)
         if era <= 3:
             s.fill(grass, (0, GROUND, LW, ROAD_TOP - GROUND))
         else:
-            s.fill(sh((150, 140, 125) if era == 4 else (175, 175, 172)), (0, GROUND, LW, ROAD_TOP - GROUND))
+            walk = sh((150, 140, 125) if era == 4 else (175, 175, 172))
+            s.fill(mix(walk, sh(SNOW_COLOR), SNOW * 0.5), (0, GROUND, LW, ROAD_TOP - GROUND))
             s.fill(sh((120, 115, 110)), (0, ROAD_TOP - 1, LW, 1))
         road_h = ROAD_BOT - ROAD_TOP
         if era == 0:
@@ -992,9 +1104,9 @@ class World:
                          sh(R.choice([(240, 230, 90), (240, 240, 240), (200, 120, 200)])))
         elif era == 1:
             s.fill(grass, (0, ROAD_TOP, LW, road_h))
-            s.fill(sh((150, 125, 85)), (0, ROAD_TOP + 6, LW, 5))
+            s.fill(mix(sh((150, 125, 85)), sh(SNOW_COLOR), SNOW * 0.6), (0, ROAD_TOP + 6, LW, 5))
         elif era <= 3:
-            s.fill(sh((145, 115, 78)), (0, ROAD_TOP, LW, road_h))
+            s.fill(mix(sh((145, 115, 78)), sh(SNOW_COLOR), SNOW * 0.6), (0, ROAD_TOP, LW, road_h))
             s.fill(sh((125, 98, 65)), (0, ROAD_TOP + 5, LW, 1))
             s.fill(sh((125, 98, 65)), (0, ROAD_BOT - 5, LW, 1))
         elif era == 4:
@@ -1057,6 +1169,20 @@ class World:
             pygame.draw.circle(s, col, (int(pf[0]), int(pf[1])), int(1 + age * 3))
         for f in self.flyers:
             draw_flyer(s, f, t)
+
+        # weather on top of everything
+        rain = mix((175, 190, 210), (70, 80, 100), NIGHT * 0.7)
+        flake = sh((245, 248, 252), 0.5)
+        for x, y, _, _, kind, seed, _ in self.drops:
+            if kind == "rain":
+                s.fill(rain, (int(x), int(y), 1, 3))
+            elif kind == "snow":
+                s.set_at((int(x), int(y)), flake)
+            else:
+                s.set_at((int(x), int(y)), sh(AUTUMN_COLORS[int(seed) % 3]))
+        if self.flash > 0:
+            v = int(self.flash * 60)
+            s.fill((v, v, v), special_flags=pygame.BLEND_RGB_ADD)
 
 
 # ----------------------------------------------------------------- saving

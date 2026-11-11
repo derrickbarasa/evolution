@@ -19,6 +19,14 @@ It's light on your laptop: the graphics card does the scaling, and on battery it
 
 With more than one monitor, the city stretches across all of them as one wide panorama, and cars and trains drive from one screen to the next.
 
+## Weather and seasons
+
+| | |
+|:-:|:-:|
+| ![Snow falling on the town](docs/winter.png) **Winter**<br>Snow settles on the ground, hills and trees. | ![A thunderstorm over the city at night](docs/storm.png) **Storms**<br>Rain, lightning, and windows lighting up. |
+
+A year passes every 12 days in the city, about half an hour. Trees blossom in spring and turn orange in autumn, with leaves drifting down. In winter it snows. The weather changes every minute or two, between clear skies, clouds, rain and summer thunderstorms, and grey skies dim the town.
+
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
 
 ## Install on Windows
