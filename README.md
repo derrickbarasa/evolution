@@ -34,6 +34,14 @@ The city also has a day and night cycle, with sunsets, stars, lit windows, smog 
 
 ## Install on Windows
 
+1. Download `TinyCity.scr` from the [latest release](https://github.com/derrickbarasa/evolution/releases/latest).
+2. Right-click it and choose **Install**.
+3. Set how many idle minutes to wait, and click **OK**.
+
+The file isn't signed, so Windows may show "Windows protected your PC" the first time. Click **More info**, then **Run anyway**.
+
+### Build it yourself
+
 You need [Python 3](https://www.python.org/downloads/) to build it once. After that, the screen saver runs without Python.
 
 ```
