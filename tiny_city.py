@@ -1,0 +1,1181 @@
+#!/usr/bin/env python3
+"""
+TINY CITY - an idle screen where civilisation evolves while you're away.
+
+Leave your computer alone and watch an empty patch of wilderness grow into
+huts, farms, castles, factories, skyscrapers and finally a green future city
+full of electric cars, drones, solar towers and maglev trains.
+Move the mouse or press any key to come back.
+
+    pip install pygame
+
+    python tiny_city.py                 start now, full screen
+    python tiny_city.py --window        windowed test mode (Esc quits, Right arrow skips an era)
+    python tiny_city.py --fast          every era lasts 15 seconds (demo)
+    python tiny_city.py --watch         sit in the background, start after 5 idle minutes
+    python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
+"""
+import argparse
+import math
+import os
+import platform
+import random
+import subprocess
+import sys
+import time
+
+try:
+    import pygame
+except ImportError:
+    sys.exit("Tiny City needs pygame:  pip install pygame")
+
+# ----------------------------------------------------------------- layout
+LH = 270            # pixel-art resolution height (width follows the screen shape)
+LW = 480
+GROUND = 206        # buildings stand on this line
+ROAD_TOP, ROAD_BOT = 210, 226
+LANE_R, LANE_L = 217, 225   # road lanes (vehicle bottoms)
+WALK_Y = 209
+RAIL_Y = 236
+WATER_Y = 240
+DAY_LEN = 160.0     # seconds for one day/night cycle
+
+ERAS = ["Wilderness", "Stone Age", "Farming Village", "Medieval Town",
+        "Industrial Age", "Modern City", "Metropolis", "Green Future"]
+ERA_LINES = [
+    "Nothing here yet but trees and deer...",
+    "The first people arrive and light their fires.",
+    "Fields are planted and wooden houses go up.",
+    "Stone walls, windmills and a castle tower.",
+    "Smokestacks rise. The first steam train arrives!",
+    "Cars, apartment blocks and street lights.",
+    "Skyscrapers scrape the sky.",
+    "Electric cars, drones, solar towers and maglev trains.",
+]
+YEARS = [-10000, -8000, -3000, 1100, 1800, 1930, 2000, 2060, 2150]
+DENSITY = [0.0, 0.30, 0.55, 0.68, 0.78, 0.84, 0.88, 0.90]   # share of land built on
+SMOG = [0, 0, 0, 0.05, 0.40, 0.22, 0.15, 0.0]
+POP = {"hut": 4, "house": 6, "field": 1, "stonehouse": 12, "tower": 20, "windmill": 3,
+       "brick": 40, "factory": 25, "apartment": 160, "shop": 20, "skyscraper": 900,
+       "stepped": 700, "glass": 1100, "forest": 800, "solar": 30}
+
+TRAFFIC = {0: [], 1: [], 2: ["oxcart"], 3: ["horsecart"],
+           4: ["carriage", "carriage", "bicycle"],
+           5: ["vintage", "vintage", "vintage", "oldbus", "bicycle"],
+           6: ["car", "car", "car", "car", "truck", "bus"],
+           7: ["ev", "ev", "ev", "ebus", "bicycle", "scooter"]}
+TRAFFIC_RATE = [0, 0, 0.12, 0.2, 0.35, 0.6, 1.0, 0.9]
+WALK_RATE = [0, 0.08, 0.15, 0.2, 0.25, 0.35, 0.45, 0.45]
+SPEED = {"oxcart": 10, "horsecart": 14, "carriage": 16, "bicycle": 12, "vintage": 22,
+         "oldbus": 20, "car": 30, "truck": 26, "bus": 25, "ev": 32, "ebus": 26,
+         "scooter": 13, "deer": 9, "walker": 8}
+LENGTH = {"oxcart": 15, "horsecart": 15, "carriage": 15, "bicycle": 5, "vintage": 10,
+          "oldbus": 18, "car": 11, "truck": 17, "bus": 20, "ev": 12, "ebus": 22,
+          "scooter": 4, "deer": 5, "walker": 2}
+CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
+              (40, 40, 45), (60, 150, 90), (230, 120, 40), (150, 155, 165)]
+OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
+EV_COLORS = [(240, 245, 250), (90, 200, 220), (120, 220, 150), (200, 205, 215), (250, 120, 160)]
+
+NIGHT = 0.0         # 0 = full day, 1 = full night (set every frame)
+
+
+# ----------------------------------------------------------------- helpers
+def clamp(v, a=0.0, b=1.0):
+    return a if v < a else b if v > b else v
+
+
+def mix(c1, c2, t):
+    t = clamp(t)
+    return (int(c1[0] + (c2[0] - c1[0]) * t),
+            int(c1[1] + (c2[1] - c1[1]) * t),
+            int(c1[2] + (c2[2] - c1[2]) * t))
+
+
+def smooth(e0, e1, x):
+    t = clamp((x - e0) / (e1 - e0))
+    return t * t * (3 - 2 * t)
+
+
+def sh(c, k=0.78):
+    """Darken a colour as night falls."""
+    return mix(c, (c[0] * 0.2, c[1] * 0.22, c[2] * 0.36), NIGHT * k)
+
+
+def window_grid(s, x, top, w, h, R, day=(70, 90, 120), lit=(255, 214, 120),
+                cw=4, ch=5, ww=2, wh=2, mx=2, my=3, chance=0.55):
+    off = sh(day)
+    on = mix(off, lit, NIGHT)
+    y = top + my
+    while y + wh <= top + h - 3:
+        xx = x + mx
+        while xx + ww <= x + w - mx:
+            s.fill(on if R.random() < chance else off, (xx, y, ww, wh))
+            xx += cw
+        y += ch
+
+
+def part(s, x, base, d, dx, dy, w, h, c):
+    """Draw a rectangle relative to a moving thing: dx from its back, dy above its base."""
+    rx = x + dx if d > 0 else x - dx - w
+    s.fill(c, (int(rx), int(base - dy - h), w, h))
+
+
+def fmt_year(y):
+    y = int(y)
+    if y < 0:
+        return f"{-y:,} BC"
+    if y < 1500:
+        return f"{y} AD"
+    return str(y)
+
+
+# ----------------------------------------------------------------- buildings
+def pick_building(level, w, rng):
+    r = rng.random()
+    if level == 1:
+        return "hut", rng.randint(7, 10), int(r < 0.5)
+    if level == 2:
+        if r < 0.25:
+            return "field", 5, 0
+        return "house", rng.randint(11, 16), rng.randint(0, 1)
+    if level == 3:
+        if r < 0.15 and w <= 24:
+            return "tower", rng.randint(32, 44), 0
+        if r < 0.32:
+            return "windmill", rng.randint(20, 26), 0
+        return "stonehouse", rng.randint(14, 24), rng.randint(0, 2)
+    if level == 4:
+        if r < 0.35:
+            return "factory", rng.randint(16, 24), rng.randint(40, 56)   # variant = chimney height
+        return "brick", rng.randint(20, 38), rng.randint(0, 2)
+    if level == 5:
+        if r < 0.25:
+            return "shop", rng.randint(14, 18), rng.randint(0, 3)
+        return "apartment", rng.randint(30, 64), rng.randint(0, 3)
+    if level == 6:
+        if r < 0.35:
+            return "stepped", rng.randint(70, 130), rng.randint(0, 2)
+        return "skyscraper", rng.randint(55, 150), rng.randint(0, 3)
+    if r < 0.14:
+        return "solar", rng.randint(16, 24), 0
+    if r < 0.42:
+        return "forest", rng.randint(60, 120), 0
+    return "glass", rng.randint(80, 175), rng.randint(0, 2)
+
+
+class Plot:
+    def __init__(self, x, w, rng):
+        self.x, self.w = x, w
+        self.rank = rng.random()
+        self.kind, self.h, self.variant, self.level = "nature", 0, 0, 0
+        self.seed = rng.randrange(1 << 30)
+        self.tree_seed = rng.randrange(1 << 30)
+        self.building, self.progress, self.build_time = False, 1.0, 1.0
+
+    def start(self, era, rng, build_time):
+        self.level = era
+        self.kind, self.h, self.variant = pick_building(era, self.w, rng)
+        self.seed = rng.randrange(1 << 30)
+        self.building, self.progress, self.build_time = True, 0.0, build_time
+
+    def full_height(self):
+        if self.kind == "factory":
+            return max(self.h, self.variant) + 4
+        return self.h + 14
+
+
+def pine(s, x, base, h):
+    s.fill(sh((90, 60, 40)), (x, base - 3, 1, 3))
+    for i in range(3):
+        top = base - h + i * h // 4
+        bw = 2 + i * 2
+        pygame.draw.polygon(s, sh((40, 110, 60)), [(x, top), (x - bw, top + h // 3), (x + bw, top + h // 3)])
+
+
+def round_tree(s, x, base, r, col=(60, 140, 70)):
+    s.fill(sh((100, 70, 45)), (x, base - 4, 1, 4))
+    pygame.draw.circle(s, sh(col), (x, base - 3 - r), r)
+    s.set_at((x - r // 2, base - 4 - r - r // 2), sh(mix(col, (255, 255, 200), 0.3)))
+
+
+def draw_nature(s, p, era, t):
+    R = random.Random(p.tree_seed)
+    if era >= 5:   # tidy city park
+        n = max(1, p.w // 11)
+        for i in range(n):
+            tx = p.x + 4 + (i * (p.w - 8)) // max(1, n - 1) if n > 1 else p.x + p.w // 2
+            round_tree(s, tx, GROUND, R.randint(3, 5))
+        bx = p.x + p.w // 2 - 2
+        s.fill(sh((120, 80, 50)), (bx, GROUND - 2, 5, 1))
+        s.fill(sh((90, 60, 40)), (bx, GROUND - 1, 1, 1))
+        s.fill(sh((90, 60, 40)), (bx + 4, GROUND - 1, 1, 1))
+        if era >= 7:
+            for _ in range(p.w // 3):
+                s.set_at((p.x + R.randrange(p.w), GROUND - 1),
+                         sh(R.choice([(240, 90, 120), (250, 220, 80), (180, 120, 240)])))
+    else:
+        for _ in range(max(1, p.w // 7)):
+            tx = p.x + 3 + R.randint(0, max(0, p.w - 6))
+            if R.random() < 0.55:
+                pine(s, tx, GROUND, R.randint(10, 19))
+            else:
+                round_tree(s, tx, GROUND, R.randint(3, 6), (70, 135, 60))
+
+
+def draw_building(s, p, t):
+    R = random.Random(p.seed)
+    k, x, w, h, v, g = p.kind, p.x, p.w, p.h, p.variant, GROUND
+    top = g - h
+
+    if k == "hut":
+        hw = min(w - 4, 14)
+        cx = x + hw // 2 + 1
+        if v:
+            fx = min(x + w - 2, cx + hw // 2 + 3)
+            f = abs(math.sin(t * 9 + p.seed))
+            if NIGHT > 0.2:
+                pygame.draw.circle(s, mix(sh((80, 120, 60)), (255, 160, 70), 0.4 * NIGHT), (fx, g - 1), 5)
+        pygame.draw.polygon(s, sh((150, 110, 70)), [(cx - hw // 2, g), (cx, g - h), (cx + hw // 2, g)])
+        pygame.draw.line(s, sh((110, 80, 50)), (cx, g - h), (cx - hw // 4, g - 1))
+        pygame.draw.line(s, sh((110, 80, 50)), (cx, g - h), (cx + hw // 4, g - 1))
+        pygame.draw.line(s, sh((100, 70, 45)), (cx - 2, g - h - 2), (cx + 2, g - h + 2))
+        s.fill(sh((50, 35, 25)), (cx - 1, g - 3, 3, 3))
+        if v:
+            s.fill((255, int(110 + 120 * f), 40), (fx, g - 2 - int(f * 2), 1, 2 + int(f * 2)))
+            s.fill((255, 80, 30), (fx - 1, g - 1, 3, 1))
+
+    elif k == "house":
+        bw = min(w - 4, 18)
+        bx = x + (w - bw) // 2
+        s.fill(sh((165, 115, 72)), (bx, top + 5, bw, h - 5))
+        for yy in range(top + 7, g, 3):
+            s.fill(sh((140, 95, 60)), (bx, yy, bw, 1))
+        roof = sh((175, 70, 45)) if v else sh((205, 175, 90))
+        pygame.draw.polygon(s, roof, [(bx - 2, top + 6), (bx + bw // 2, top), (bx + bw + 1, top + 6)])
+        s.fill(sh((70, 45, 30)), (bx + 2, g - 5, 3, 5))
+        s.fill(mix(sh((60, 50, 40)), (255, 190, 100), NIGHT), (bx + bw - 6, top + 8, 3, 2))
+
+    elif k == "field":
+        crop = (205, 175, 70) if R.random() < 0.5 else (95, 165, 60)
+        s.fill(sh((120, 90, 55)), (x, g - 2, w, 2))
+        for xx in range(x + 1, x + w - 1, 2):
+            sway = round(math.sin(t * 2 + xx * 0.5) * 0.7)
+            s.fill(sh(crop), (xx + sway, g - 6, 1, 4))
+        for xx in range(x, x + w, 4):
+            s.fill(sh((120, 85, 50)), (xx, g - 4, 1, 4))
+        s.fill(sh((120, 85, 50)), (x, g - 3, w, 1))
+
+    elif k == "stonehouse":
+        bw = min(w - 2, 22)
+        bx = x + (w - bw) // 2
+        wall = sh([(150, 145, 135), (135, 130, 125), (160, 150, 130)][v])
+        s.fill(wall, (bx, top + 6, bw, h - 6))
+        for _ in range(bw * h // 12):
+            s.set_at((bx + R.randrange(bw), top + 6 + R.randrange(h - 6)), sh((115, 110, 105)))
+        if v == 2:
+            s.fill(wall, (bx, top + 3, bw, 3))
+            for xx in range(bx, bx + bw, 3):
+                s.fill(wall, (xx, top + 1, 2, 2))
+        else:
+            roof = sh((95, 60, 55)) if v == 0 else sh((70, 70, 95))
+            pygame.draw.polygon(s, roof, [(bx - 1, top + 7), (bx + bw // 2, top), (bx + bw, top + 7)])
+        window_grid(s, bx, top + 6, bw, h - 6, R, day=(60, 55, 50), lit=(255, 180, 90), cw=5, ch=6, chance=0.45)
+        s.fill(sh((80, 55, 35)), (bx + bw // 2 - 1, g - 5, 3, 5))
+
+    elif k == "tower":
+        tw = min(w - 4, 12)
+        bx = x + (w - tw) // 2
+        wall = sh((150, 145, 140))
+        s.fill(wall, (bx, top + 3, tw, h - 3))
+        for xx in range(bx, bx + tw, 3):
+            s.fill(wall, (xx, top, 2, 3))
+        for yy in range(top + 8, g - 6, 7):
+            s.fill(mix(sh((40, 35, 35)), (255, 180, 90), NIGHT), (bx + tw // 2, yy, 1, 3))
+        fx = bx + tw // 2
+        s.fill(sh((90, 80, 70)), (fx, top - 8, 1, 8))
+        wave = round(math.sin(t * 4 + p.seed))
+        pygame.draw.polygon(s, sh((200, 40, 40)), [(fx + 1, top - 8), (fx + 6, top - 7 + wave), (fx + 1, top - 5)])
+        s.fill(sh((70, 50, 35)), (fx - 1, g - 5, 3, 5))
+
+    elif k == "windmill":
+        cx = x + w // 2
+        pygame.draw.polygon(s, sh((225, 215, 195)), [(cx - 5, g), (cx - 3, top + 3), (cx + 3, top + 3), (cx + 5, g)])
+        pygame.draw.polygon(s, sh((120, 70, 50)), [(cx - 4, top + 4), (cx, top - 1), (cx + 4, top + 4)])
+        s.fill(sh((90, 60, 40)), (cx - 1, g - 4, 2, 4))
+        hub = (cx, top + 2)
+        for i in range(4):
+            a = t * 1.2 + p.seed + i * math.pi / 2
+            pygame.draw.line(s, sh((235, 228, 210)), hub, (hub[0] + math.cos(a) * 11, hub[1] + math.sin(a) * 11), 2)
+        s.set_at(hub, sh((80, 60, 40)))
+
+    elif k == "brick":
+        col = [(155, 72, 52), (135, 62, 48), (170, 95, 65)][v]
+        s.fill(sh(col), (x + 1, top, w - 2, h))
+        s.fill(sh(mix(col, (40, 30, 30), 0.4)), (x, top, w, 2))
+        window_grid(s, x + 1, top + 2, w - 2, h - 2, R, day=(70, 80, 100), lit=(255, 200, 110), chance=0.5)
+        s.fill(sh((60, 40, 30)), (x + w // 2 - 1, g - 5, 3, 5))
+        if R.random() < 0.6:
+            s.fill(sh(mix(col, (0, 0, 0), 0.3)), (x + 4, top - 4, 2, 4))
+
+    elif k == "factory":
+        bx, bw = x + 1, w - 2
+        s.fill(sh((120, 95, 85)), (bx, top, bw, h))
+        for xx in range(bx, bx + bw - 7, 6):
+            pygame.draw.polygon(s, sh((95, 80, 75)), [(xx, top), (xx + 5, top - 4), (xx + 5, top)])
+        glow = mix(sh((70, 80, 90)), (255, 190, 90), NIGHT)
+        s.fill(glow, (bx + 2, top + 4, bw - 8, 2))
+        if h > 18:
+            s.fill(glow, (bx + 2, top + 9, bw - 8, 2))
+        s.fill(sh((80, 70, 65)), (bx + 3, g - 7, 6, 7))
+        chx, ch_top = x + w - 6, g - v
+        s.fill(sh((150, 70, 50)), (chx, ch_top, 4, v))
+        s.fill(sh((225, 225, 225)), (chx, ch_top + 3, 4, 2))
+        s.fill(sh((90, 60, 50)), (chx - 1, ch_top, 6, 1))
+
+    elif k == "apartment":
+        bx, bw = x + 1, w - 2
+        col = [(220, 200, 165), (185, 195, 205), (205, 165, 145), (175, 195, 165)][v]
+        s.fill(sh(col), (bx, top, bw, h))
+        s.fill(sh(mix(col, (60, 60, 60), 0.35)), (bx - 1, top, bw + 2, 2))
+        window_grid(s, bx, top, bw, h, R, day=(80, 100, 125), lit=(255, 215, 140),
+                    cw=5, ch=6, ww=3, wh=3, mx=2, my=4)
+        for yy in range(top + 8, g - 6, 6):
+            s.fill(sh(mix(col, (90, 90, 90), 0.4)), (bx + 1, yy, bw - 2, 1))
+        s.fill(sh((70, 60, 55)), (bx + bw // 2 - 2, g - 5, 4, 5))
+        if v % 2 == 0:
+            s.fill(sh((120, 90, 70)), (bx + 3, top - 5, 4, 3))
+            s.fill(sh((80, 70, 60)), (bx + 3, top - 2, 1, 2))
+            s.fill(sh((80, 70, 60)), (bx + 6, top - 2, 1, 2))
+        else:
+            s.fill(sh((90, 90, 95)), (bx + bw - 4, top - 6, 1, 6))
+            s.fill(sh((90, 90, 95)), (bx + bw - 6, top - 5, 5, 1))
+
+    elif k == "shop":
+        bx, bw = x + 1, w - 2
+        s.fill(sh([(230, 225, 210), (210, 200, 190), (220, 215, 200), (200, 210, 215)][v]), (bx, top, bw, h))
+        aw = [(200, 60, 60), (60, 110, 200), (60, 160, 90), (225, 160, 40)][v]
+        for i, xx in enumerate(range(bx - 1, bx + bw + 1, 2)):
+            s.fill(sh(aw) if i % 2 == 0 else sh((240, 240, 240)), (xx, g - 9, 2, 3))
+        s.fill(mix(sh((120, 160, 190)), (255, 220, 150), NIGHT), (bx + 2, g - 6, bw - 8, 5))
+        s.fill(sh((80, 60, 50)), (bx + bw - 5, g - 6, 3, 6))
+        neon = 0.3 + 0.6 * NIGHT * (math.sin(t * 3 + p.seed) > -0.3)
+        s.fill(mix(sh(aw), (255, 255, 255), neon), (bx + 2, top + 1, bw - 4, 2))
+
+    elif k == "skyscraper":
+        bx, bw = x + 1, w - 2
+        col = [(110, 125, 145), (90, 100, 122), (145, 152, 165), (80, 110, 140)][v]
+        s.fill(sh(col), (bx, top, bw, h))
+        s.fill(sh(mix(col, (255, 255, 255), 0.25)), (bx, top, 1, h))
+        window_grid(s, bx, top + 2, bw, h - 2, R, day=mix(col, (170, 200, 230), 0.5), lit=(255, 240, 175),
+                    cw=3, ch=4, mx=2, my=2, chance=0.6)
+        s.fill(sh(mix(col, (30, 30, 40), 0.4)), (bx, top, bw, 3))
+        ax = bx + bw // 2
+        s.fill(sh((160, 160, 170)), (ax, top - 10, 1, 10))
+        if (t + p.seed % 7) % 2 < 0.35:
+            s.set_at((ax, top - 11), (255, 40, 40))
+        s.fill(mix(sh((60, 70, 80)), (255, 230, 170), NIGHT * 0.8), (bx + 2, g - 4, bw - 4, 4))
+
+    elif k == "stepped":
+        bx, bw = x + 1, w - 2
+        col = [(170, 160, 140), (150, 150, 160), (125, 140, 150)][v]
+        tiers = [(bw, int(h * 0.5)), (bw - 6, int(h * 0.3)), (bw - 12, h - int(h * 0.5) - int(h * 0.3))]
+        y = g
+        for tw, th in tiers:
+            if tw < 4:
+                break
+            tx = bx + (bw - tw) // 2
+            y -= th
+            s.fill(sh(col), (tx, y, tw, th))
+            s.fill(sh(mix(col, (40, 40, 50), 0.35)), (tx, y, tw, 1))
+            window_grid(s, tx, y, tw, th, R, day=(90, 110, 130), lit=(255, 225, 150), cw=3, ch=4, mx=1, my=2)
+        ax = bx + bw // 2
+        s.fill(sh((200, 200, 205)), (ax, y - 12, 1, 12))
+        if (t + p.seed % 5) % 2.4 < 0.4:
+            s.set_at((ax, y - 13), (255, 40, 40))
+
+    elif k == "glass":
+        bx, bw = x + 1, w - 2
+        base = (85, 175, 195) if v != 1 else (110, 150, 210)
+        c = sh(base, 0.6)
+        if v == 0:
+            pygame.draw.polygon(s, c, [(bx, top), (bx + bw - 1, top - 10), (bx + bw - 1, top)])
+        elif v == 2:
+            pygame.draw.ellipse(s, c, (bx, top - 7, bw, 14))
+        s.fill(c, (bx, top, bw, h))
+        s.fill(sh(mix(base, (255, 255, 255), 0.45), 0.6), (bx + 1, top, 2, h))
+        s.fill(sh(mix(base, (255, 255, 255), 0.25), 0.6), (bx + bw // 2, top, 1, h))
+        dim = sh(mix(base, (20, 40, 60), 0.3), 0.6)
+        for yy in range(top + 3, g - 4, 4):
+            s.fill(mix(dim, (170, 245, 255), NIGHT * (0.9 if R.random() < 0.7 else 0.15)), (bx + 3, yy, bw - 4, 1))
+        if v == 1:
+            for xx in range(bx, bx + bw - 1, 2):
+                s.fill(sh((60, 170, 80)), (xx, top - 2 - R.randint(0, 1), 2, 3))
+        s.fill(mix(sh((60, 90, 100)), (150, 255, 200), NIGHT * 0.8), (bx + 2, g - 4, bw - 4, 4))
+
+    elif k == "forest":
+        bx, bw = x + 1, w - 2
+        s.fill(sh((215, 215, 205)), (bx, top, bw, h))
+        window_grid(s, bx, top, bw, h, R, day=(120, 140, 150), lit=(255, 220, 150), cw=4, ch=6, mx=2, my=2)
+        for i, yy in enumerate(range(top + 5, g - 4, 6)):
+            s.fill(sh((170, 170, 165)), (bx - 1, yy, bw + 2, 1))
+            for xx in range(bx + (i % 2) * 2, bx + bw, 4):
+                pygame.draw.circle(s, sh(mix((45, 140, 65), (100, 195, 85), R.random())), (xx + 1, yy - 1), 2)
+        for xx in range(bx + 2, bx + bw - 1, 4):
+            pygame.draw.circle(s, sh((60, 160, 70)), (xx, top - 2), 3)
+
+    elif k == "solar":
+        bx, bw = x + 1, w - 2
+        s.fill(sh((235, 235, 230)), (bx, top + 3, bw, h - 3))
+        for xx in range(bx, bx + bw - 4, 5):
+            pygame.draw.polygon(s, sh((40, 70, 150), 0.5), [(xx, top + 3), (xx + 4, top), (xx + 5, top), (xx + 1, top + 3)])
+        s.fill(mix(sh((120, 170, 190)), (255, 230, 170), NIGHT), (bx + 2, top + 6, bw - 4, 3))
+        s.fill(sh((80, 80, 85)), (bx + 3, g - 5, 3, 5))
+        px = bx + bw - 3
+        s.fill(sh((60, 180, 110)), (px, g - 6, 2, 6))
+        s.set_at((px, g - 4), (190, 255, 130) if int(t * 2) % 2 else (40, 120, 70))
+
+
+def draw_construction(s, p, t):
+    s.fill(sh((120, 95, 70)), (p.x, GROUND - 1, p.w, 1))
+    full = p.full_height()
+    cur = int(full * p.progress)
+    s.set_clip(pygame.Rect(p.x - 12, GROUND - cur, p.w + 24, cur + 1))
+    draw_building(s, p, t)
+    s.set_clip(None)
+    pole = sh((150, 120, 80)) if p.level < 5 else sh((170, 170, 175))
+    stop = GROUND - min(p.h, cur) - 3
+    for xx in (p.x, p.x + p.w - 1):
+        s.fill(pole, (xx, stop, 1, GROUND - stop))
+    for yy in range(GROUND - 4, stop, -5):
+        s.fill(pole, (p.x, yy, p.w, 1))
+    if p.level >= 5:     # tower crane
+        mx = p.x + p.w + 1
+        ctop = GROUND - p.h - 16
+        yel = sh((240, 190, 40))
+        s.fill(yel, (mx, ctop, 1, GROUND - ctop))
+        s.fill(yel, (p.x - 6, ctop, p.w + 10, 1))
+        s.fill(sh((90, 90, 90)), (mx + 1, ctop, 3, 2))
+        hx = int(p.x + p.w / 2 + math.sin(t * 0.8 + p.seed) * p.w / 3)
+        hook_y = max(ctop + 2, GROUND - cur - 4)
+        s.fill(sh((60, 60, 60)), (hx, ctop + 1, 1, hook_y - ctop))
+        s.fill(sh((200, 80, 40)), (hx - 1, hook_y, 3, 2))
+        if NIGHT > 0.3 and int(t * 1.5) % 2:
+            s.set_at((mx, ctop - 1), (255, 40, 40))
+
+
+# ----------------------------------------------------------------- moving things
+def draw_mover(s, m, t):
+    k, x, b, d = m["kind"], m["x"], m["base"], m["dir"]
+    c = sh(m["color"])
+    dark = sh((25, 25, 30))
+    glass = mix(sh((150, 190, 210)), (255, 230, 160), NIGHT * 0.6)
+    lamp = mix(dark, (255, 245, 180), NIGHT)
+    step = int(t * 7 + m["seed"]) % 2
+
+    def P(dx, dy, w, h, col):
+        part(s, x, b, d, dx, dy, w, h, col)
+
+    if k == "walker":
+        P(step, 0, 1, 1, sh((40, 40, 60)))
+        P(1 - step, 0, 1, 1, sh((40, 40, 60)))
+        P(0, 1, 1, 2, c)
+        P(0, 3, 1, 1, sh(m["skin"]))
+        if m.get("dog"):
+            P(-4, 0, 2, 1, sh((140, 100, 60)))
+    elif k == "deer":
+        brown = sh((150, 100, 60))
+        P(0, 1 + step, 1, 1, brown)
+        P(3, 1 + (1 - step), 1, 1, brown)
+        P(0, 0, 1, 1, brown)
+        P(3, 0, 1, 1, brown)
+        P(0, 2, 4, 2, brown)
+        P(4, 3, 1, 2, brown)
+        P(4, 5, 1, 1, sh((90, 60, 40)))
+    elif k == "oxcart":
+        P(0, 1, 7, 3, sh((150, 110, 70)))
+        P(2, 0, 2, 2, dark)
+        P(1, 4, 1, 2, sh((170, 90, 60)))
+        P(7, 2, 2, 1, sh((100, 80, 60)))
+        P(9, 1, 5, 3, sh((120, 90, 70)))
+        P(13, 3, 2, 2, sh((120, 90, 70)))
+        P(9 + step, 0, 1, 1, sh((90, 70, 55)))
+        P(12 - step, 0, 1, 1, sh((90, 70, 55)))
+    elif k in ("horsecart", "carriage"):
+        body = sh((140, 100, 60)) if k == "horsecart" else sh((30, 30, 35))
+        P(0, 1, 8, 4 if k == "carriage" else 3, body)
+        if k == "horsecart":
+            P(0, 4, 8, 1, sh((220, 210, 190)))
+        else:
+            P(2, 3, 3, 1, glass)
+        P(1, 0, 2, 2, dark)
+        P(5, 0, 2, 2, dark)
+        P(8, 2, 2, 1, sh((90, 70, 50)))
+        P(10, 2, 4, 2, sh((110, 70, 40)))
+        P(13, 3, 2, 3, sh((110, 70, 40)))
+        P(10 + step, 0, 1, 2, sh((90, 60, 35)))
+        P(13 - step, 0, 1, 2, sh((90, 60, 35)))
+    elif k == "bicycle":
+        P(0, 0, 1, 1, dark)
+        P(4, 0, 1, 1, dark)
+        P(1, 1, 3, 1, c)
+        P(2, 2, 1, 2, sh(m["skin2"]))
+        P(2, 4, 1, 1, sh(m["skin"]))
+    elif k == "scooter":
+        P(0, 0, 4, 1, dark)
+        P(3, 1, 1, 3, dark)
+        P(1, 1, 1, 3, c)
+        P(1, 4, 1, 1, sh(m["skin"]))
+    elif k == "vintage":
+        P(0, 1, 10, 3, c)
+        P(2, 4, 6, 3, c)
+        P(3, 5, 4, 1, glass)
+        P(1, 0, 2, 2, dark)
+        P(7, 0, 2, 2, dark)
+        P(9, 2, 1, 1, lamp)
+    elif k == "oldbus":
+        P(0, 1, 18, 7, c)
+        P(0, 3, 18, 1, sh((230, 220, 190)))
+        P(2, 5, 14, 2, glass)
+        P(2, 0, 2, 2, dark)
+        P(13, 0, 2, 2, dark)
+        P(17, 2, 1, 1, lamp)
+    elif k == "car":
+        P(0, 1, 11, 3, c)
+        P(2, 4, 6, 2, c)
+        P(3, 4, 4, 1, glass)
+        P(1, 0, 2, 2, dark)
+        P(8, 0, 2, 2, dark)
+        P(10, 2, 1, 1, lamp)
+        P(0, 2, 1, 1, mix(sh((120, 30, 30)), (255, 40, 40), NIGHT))
+    elif k == "truck":
+        P(0, 1, 12, 8, sh(mix(m["color"], (255, 255, 255), 0.5)))
+        P(12, 1, 5, 6, c)
+        P(14, 4, 2, 2, glass)
+        P(1, 0, 2, 2, dark)
+        P(9, 0, 2, 2, dark)
+        P(14, 0, 2, 2, dark)
+        P(16, 2, 1, 1, lamp)
+    elif k == "bus":
+        P(0, 1, 20, 8, c)
+        P(2, 5, 16, 2, glass)
+        P(2, 0, 2, 2, dark)
+        P(15, 0, 2, 2, dark)
+        P(19, 2, 1, 1, lamp)
+    elif k == "ev":
+        glow = mix(dark, (80, 255, 170), 0.3 + 0.7 * NIGHT)
+        P(1, 0, 10, 1, glow)
+        P(0, 1, 12, 2, c)
+        P(2, 3, 7, 2, glass)
+        P(1, 3, 1, 1, c)
+        P(9, 3, 1, 1, c)
+        P(2, 0, 2, 1, dark)
+        P(8, 0, 2, 1, dark)
+        P(11, 1, 1, 1, mix(dark, (180, 255, 255), 0.5 + 0.5 * NIGHT))
+    elif k == "ebus":
+        P(0, 1, 22, 7, sh((240, 245, 245)))
+        P(0, 2, 22, 1, sh((60, 200, 140)))
+        P(2, 5, 18, 2, glass)
+        P(4, 8, 12, 1, sh((40, 70, 150)))
+        P(3, 0, 2, 2, dark)
+        P(16, 0, 2, 2, dark)
+        P(21, 2, 1, 1, mix(dark, (180, 255, 255), 0.5 + 0.5 * NIGHT))
+
+
+def draw_train(s, tr, t):
+    k, x, d, n = tr["kind"], tr["x"], tr["dir"], tr["cars"]
+    b = RAIL_Y
+    dark = sh((30, 30, 35))
+    win = mix(sh((150, 180, 200)), (255, 225, 150), NIGHT)
+
+    def P(dx, dy, w, h, col):
+        part(s, x, b, d, dx, dy, w, h, col)
+
+    L = n * 17
+    if k == "maglev":
+        P(0, 0, L + 16, 1, mix(dark, (100, 240, 255), 0.4 + 0.6 * NIGHT))
+    for i in range(n):
+        cx = i * 17
+        if k == "steam":
+            P(cx, 1, 16, 6, sh((130, 40, 35)))
+            P(cx + 2, 4, 12, 2, win)
+        elif k == "diesel":
+            P(cx, 1, 16, 7, sh((200, 120, 40)))
+            P(cx + 2, 5, 12, 2, win)
+        elif k == "commuter":
+            P(cx, 1, 16, 7, sh((190, 195, 200)))
+            P(cx, 3, 16, 1, sh((50, 90, 180)))
+            P(cx + 2, 5, 12, 2, win)
+        else:
+            P(cx, 2, 16, 6, sh((240, 245, 248)))
+            P(cx, 3, 16, 1, sh((60, 200, 200)))
+            P(cx + 1, 5, 14, 2, win)
+        if k != "maglev":
+            P(cx + 2, 0, 2, 1, dark)
+            P(cx + 12, 0, 2, 1, dark)
+    if k == "steam":
+        P(L, 1, 5, 9, sh((40, 40, 45)))
+        P(L + 1, 6, 3, 2, win)
+        P(L + 5, 1, 10, 6, sh((30, 30, 35)))
+        P(L + 11, 7, 2, 4, sh((30, 30, 35)))
+        P(L + 15, 1, 1, 2, sh((180, 40, 40)))
+        P(L + 2, 0, 2, 1, dark)
+        P(L + 7, 0, 3, 1, dark)
+        P(L + 11, 0, 3, 1, dark)
+        P(L + 14, 4, 1, 1, mix(dark, (255, 230, 150), NIGHT))
+    elif k in ("diesel", "commuter"):
+        col = sh((200, 120, 40)) if k == "diesel" else sh((190, 195, 200))
+        P(L, 1, 16, 8, col)
+        P(L + 12, 5, 3, 2, win)
+        P(L + 2, 0, 2, 1, dark)
+        P(L + 12, 0, 2, 1, dark)
+        P(L + 15, 2, 1, 1, mix(dark, (255, 240, 180), NIGHT))
+    else:
+        P(L, 2, 12, 6, sh((240, 245, 248)))
+        P(L + 12, 2, 3, 4, sh((240, 245, 248)))
+        P(L + 10, 5, 3, 2, win)
+        P(L, 3, 15, 1, sh((60, 200, 200)))
+
+
+def draw_boat(s, bt, t):
+    k, x, b, d = bt["kind"], bt["x"], bt["base"], bt["dir"]
+
+    def P(dx, dy, w, h, col):
+        part(s, x, b, d, dx, dy, w, h, col)
+
+    if k == "canoe":
+        P(0, 0, 8, 2, sh((130, 85, 50)))
+        P(4, 2, 1, 2, sh((170, 90, 60)))
+    elif k == "sailboat":
+        P(0, 0, 10, 2, sh((150, 100, 60)))
+        P(5, 2, 1, 9, sh((90, 70, 50)))
+        for i, w in enumerate((4, 3, 2, 1)):
+            P(6, 3 + i * 2, w, 2, sh((240, 235, 220)))
+    elif k == "steamboat":
+        P(0, 0, 16, 3, sh((60, 40, 40)))
+        P(3, 3, 9, 3, sh((235, 230, 220)))
+        P(4, 4, 7, 1, mix(sh((100, 100, 110)), (255, 220, 140), NIGHT))
+        P(9, 6, 2, 4, sh((170, 50, 40)))
+    elif k == "motorboat":
+        P(-3, 0, 3, 1, sh((230, 240, 250)))
+        P(0, 0, 10, 2, sh((240, 240, 240)))
+        P(0, 1, 10, 1, sh((200, 50, 50)))
+        P(4, 2, 4, 2, mix(sh((120, 160, 190)), (255, 220, 150), NIGHT * 0.5))
+    else:
+        P(0, 0, 22, 3, sh((240, 245, 245)))
+        P(0, 1, 22, 1, sh((60, 200, 160)))
+        P(3, 3, 16, 3, mix(sh((130, 180, 200)), (200, 255, 240), NIGHT * 0.7))
+        P(4, 6, 14, 1, sh((40, 70, 150)))
+
+
+def draw_flyer(s, f, t):
+    k, x, y, d = f["kind"], int(f["x"]), int(f["y"] + math.sin(t * 2 + f["seed"]) * 1.5), f["dir"]
+
+    def P(dx, dy, w, h, col):
+        part(s, x, y, d, dx, dy, w, h, col)
+
+    if k == "bird":
+        flap = int(t * 6 + f["seed"]) % 2
+        col = sh((40, 40, 50))
+        s.set_at((x, y), col)
+        s.set_at((x - 1, y - flap), col)
+        s.set_at((x + 1, y - flap), col)
+    elif k == "biplane":
+        P(0, 0, 7, 2, sh((190, 50, 40)))
+        P(2, 3, 4, 1, sh((230, 220, 200)))
+        P(2, -2, 4, 1, sh((230, 220, 200)))
+        P(0, 2, 1, 2, sh((190, 50, 40)))
+        P(7, 0, 1, 2, sh((60, 60, 60)) if int(t * 20) % 2 else sh((200, 200, 200)))
+    elif k == "plane":
+        P(0, 0, 9, 1, sh((230, 232, 238)))
+        P(0, 1, 1, 2, sh((230, 232, 238)))
+        P(4, -1, 2, 1, sh((200, 205, 215)))
+        if int(t * 2 + f["seed"]) % 2:
+            P(4, 0, 1, 1, (255, 50, 50))
+    elif k == "drone":
+        P(0, 0, 3, 1, sh((50, 55, 60)))
+        P(-1, 1, 1, 1, sh((120, 120, 130)))
+        P(3, 1, 1, 1, sh((120, 120, 130)))
+        if int(t * 3 + f["seed"]) % 2:
+            P(1, -1, 1, 1, (90, 255, 140))
+        P(1, -2, 1, 1, sh((240, 160, 60)))
+    elif k == "flycar":
+        P(1, -1, 2, 1, mix((60, 160, 255), (160, 240, 255), (t * 5) % 1))
+        P(8, -1, 2, 1, mix((60, 160, 255), (160, 240, 255), (t * 5 + 0.5) % 1))
+        P(0, 0, 11, 2, sh(f["color"]))
+        P(2, 2, 6, 2, mix(sh((150, 190, 210)), (255, 230, 160), NIGHT * 0.6))
+
+
+# ----------------------------------------------------------------- the world
+class World:
+    def __init__(self, era_seconds, seed=None):
+        self.rng = random.Random(seed)
+        self.era_seconds = era_seconds
+        self.t = 0.0
+        rng = self.rng
+        self.plots = []
+        x = rng.randint(0, 4)
+        while x < LW - 14:
+            w = min(rng.randint(16, 32), LW - x - 2)
+            if w < 14:
+                break
+            self.plots.append(Plot(x, w, rng))
+            x += w + rng.randint(2, 5)
+        self.movers, self.trains, self.boats, self.flyers, self.smoke = [], [], [], [], []
+        self.stars = [(rng.randrange(LW), rng.randrange(140), rng.uniform(0.4, 1.0)) for _ in range(110)]
+        self.clouds = [[rng.uniform(0, LW), rng.uniform(15, 80), rng.randint(3, 6), rng.uniform(2, 6)] for _ in range(6)]
+        self.far = self.ridge(110, 150, 10)
+        self.near = self.ridge(150, 180, 16)
+        self.turbines = list(range(rng.randint(8, 20), LW - 8, 34))
+        rng.shuffle(self.turbines)
+        self.pop_shown = 0.0
+        self.banner_t = 7.0
+        self.last_era = 0
+        self.train_timer = 6.0
+
+    def ridge(self, lo, hi, step):
+        pts, y = [], self.rng.uniform(lo, hi)
+        for x in range(-step, LW + 2 * step, step):
+            y = clamp(y + self.rng.uniform(-11, 11), lo, hi)
+            pts.append((x, y))
+        return pts
+
+    @staticmethod
+    def ridge_y(pts, x):
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x0 <= x <= x1:
+                return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+        return pts[-1][1]
+
+    @property
+    def era_f(self):
+        return min(self.t / self.era_seconds, len(ERAS) - 0.001)
+
+    def year(self):
+        ef = self.era_f
+        e = int(ef)
+        return YEARS[e] + (YEARS[e + 1] - YEARS[e]) * (ef - e)
+
+    def population(self):
+        n = sum(POP.get(p.kind, 0) for p in self.plots if p.kind != "nature" and not p.building)
+        return n * 10 + sum(1 for m in self.movers if m["kind"] != "deer")
+
+    def puff(self, x, y, size=1.0, dark=False):
+        if len(self.smoke) < 450:
+            r = self.rng
+            self.smoke.append([x + r.uniform(-1, 1), y, r.uniform(2, 6), r.uniform(-9, -5) * size,
+                               0.0, r.uniform(2.5, 4.5) * size, dark])
+
+    def spawn_side(self, length, speed):
+        d = 1 if self.rng.random() < 0.5 else -1
+        x = -length - 2 if d > 0 else LW + length + 2
+        return d, x, speed * self.rng.uniform(0.8, 1.2)
+
+    def update(self, dt):
+        self.t += dt
+        t, rng = self.t, self.rng
+        era = int(self.era_f)
+        if era != self.last_era:
+            self.last_era = era
+            self.banner_t = 7.0
+        self.banner_t = max(0.0, self.banner_t - dt)
+
+        # ---- the city grows
+        rate = 6.0 / self.era_seconds
+        for p in self.plots:
+            if p.building:
+                p.progress += dt / p.build_time
+                if p.progress >= 1.0:
+                    p.progress, p.building = 1.0, False
+            elif (p.kind == "nature" and p.rank < DENSITY[era]) or (p.kind != "nature" and p.level < era):
+                if rng.random() < dt * rate:
+                    p.start(era, rng, clamp(self.era_seconds * rng.uniform(0.05, 0.1), 2.0, 14.0))
+            if not p.building:
+                if p.kind == "factory" and rng.random() < dt * 5:
+                    self.puff(p.x + p.w - 4, GROUND - p.variant - 1, 1.3, dark=True)
+                elif p.kind == "hut" and p.variant and rng.random() < dt * 1.2:
+                    self.puff(min(p.x + p.w - 2, p.x + min(p.w - 4, 14) + 4), GROUND - 4, 0.6)
+
+        # ---- traffic, walkers and wildlife
+        if rng.random() < dt * WALK_RATE[era]:
+            d, x, v = self.spawn_side(2, SPEED["walker"])
+            shirts = [(130, 90, 60), (110, 80, 50)] if era <= 2 else \
+                     [(200, 60, 60), (60, 90, 200), (240, 200, 60), (80, 160, 90), (230, 230, 230), (160, 80, 180)]
+            self.movers.append(dict(kind="walker", x=x, base=WALK_Y, dir=d, v=v, color=rng.choice(shirts),
+                                    skin=rng.choice([(240, 200, 160), (200, 150, 110), (150, 100, 70), (100, 70, 50)]),
+                                    seed=rng.random() * 10, dog=era >= 5 and rng.random() < 0.15))
+        if TRAFFIC[era] and rng.random() < dt * TRAFFIC_RATE[era]:
+            kind = rng.choice(TRAFFIC[era])
+            d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind])
+            col = rng.choice(EV_COLORS if era >= 7 else OLD_COLORS if era <= 5 else CAR_COLORS)
+            if kind == "bus":
+                col = rng.choice([(240, 190, 40), (200, 50, 50), (60, 120, 200)])
+            if kind == "oldbus":
+                col = rng.choice([(60, 110, 70), (150, 40, 40)])
+            base = WALK_Y if kind in ("bicycle", "scooter") else LANE_R if d > 0 else LANE_L
+            entry_clear = all(abs(m["x"] - x) > LENGTH[m["kind"]] + LENGTH[kind] + 6
+                              for m in self.movers if m["base"] == base and m["dir"] == d)
+            if entry_clear:
+                self.movers.append(dict(kind=kind, x=x, base=base, dir=d, v=v, color=col,
+                                        skin=(230, 190, 150), skin2=rng.choice(CAR_COLORS), seed=rng.random() * 10))
+        if era <= 1 and rng.random() < dt * 0.04:
+            d, x, v = self.spawn_side(5, SPEED["deer"])
+            self.movers.append(dict(kind="deer", x=x, base=rng.choice((LANE_R, LANE_L)), dir=d, v=v,
+                                    color=(0, 0, 0), seed=rng.random() * 10))
+
+        for lane in (LANE_R, LANE_L):
+            cars = sorted([m for m in self.movers if m["base"] == lane], key=lambda m: m["x"] * m["dir"], reverse=True)
+            for i, m in enumerate(cars):
+                v = m["v"]
+                if i > 0:
+                    ahead = cars[i - 1]
+                    gap = (ahead["x"] - m["x"]) * m["dir"] - LENGTH[m["kind"]]
+                    if gap < 4:
+                        v = min(v, ahead.get("cur", ahead["v"]))
+                        if gap < 1:
+                            v = 0
+                m["cur"] = v
+        for m in self.movers:
+            m["x"] += m.get("cur", m["v"]) * m["dir"] * dt
+        self.movers = [m for m in self.movers if -40 < m["x"] < LW + 40]
+
+        # ---- trains
+        if era >= 4:
+            self.train_timer -= dt
+            if self.train_timer <= 0 and not self.trains:
+                kind = ["steam", "diesel", "commuter", "maglev"][era - 4]
+                d = 1 if rng.random() < 0.5 else -1
+                cars = rng.randint(3, 5)
+                total = cars * 17 + 16
+                self.trains.append(dict(kind=kind, x=-total if d > 0 else LW + total, dir=d, cars=cars,
+                                        v=[28, 40, 50, 90][era - 4]))
+                self.train_timer = rng.uniform(14, 30)
+        for tr in self.trains:
+            tr["x"] += tr["v"] * tr["dir"] * dt
+            if tr["kind"] == "steam" and rng.random() < dt * 9:
+                L = tr["cars"] * 17
+                fx = tr["x"] + (L + 12) * tr["dir"]
+                self.puff(fx, RAIL_Y - 12, 1.2)
+        self.trains = [tr for tr in self.trains if (tr["x"] < LW + 2 if tr["dir"] > 0 else tr["x"] > -2)]
+
+        # ---- boats
+        if era >= 1 and rng.random() < dt * 0.04 and len(self.boats) < 4:
+            kind = {1: "canoe", 2: "canoe", 3: "sailboat", 4: "steamboat", 5: "motorboat",
+                    6: "motorboat", 7: "eferry"}[era]
+            if era in (5, 6) and rng.random() < 0.3:
+                kind = "sailboat"
+            d, x, v = self.spawn_side(20, {"canoe": 5, "sailboat": 8, "steamboat": 9,
+                                           "motorboat": 18, "eferry": 10}[kind])
+            self.boats.append(dict(kind=kind, x=x, dir=d, v=v, base=rng.randint(WATER_Y + 9, LH - 5)))
+        for bt in self.boats:
+            bt["x"] += bt["v"] * bt["dir"] * dt
+            if bt["kind"] == "steamboat" and rng.random() < dt * 3:
+                self.puff(bt["x"] + 10 * bt["dir"], bt["base"] - 10, 0.9)
+        self.boats = [b for b in self.boats if -40 < b["x"] < LW + 40]
+
+        # ---- things in the sky
+        options = []
+        if era <= 4:
+            options += [("bird", 0.12)]
+        if era == 5:
+            options += [("biplane", 0.02)]
+        if era == 6:
+            options += [("plane", 0.04)]
+        if era == 7:
+            options += [("drone", 0.15), ("flycar", 0.05), ("plane", 0.02)]
+        for kind, r in options:
+            if rng.random() < dt * r:
+                d, x, v = self.spawn_side(10, {"bird": 14, "biplane": 18, "plane": 30, "drone": 12, "flycar": 26}[kind])
+                y = {"bird": rng.uniform(40, 110), "biplane": rng.uniform(40, 80), "plane": rng.uniform(15, 45),
+                     "drone": rng.uniform(60, 150), "flycar": rng.uniform(55, 115)}[kind]
+                n = rng.randint(3, 6) if kind == "bird" else 1
+                for i in range(n):
+                    self.flyers.append(dict(kind=kind, x=x - i * 5 * d, y=y + (i % 2) * 3 + i, dir=d, v=v,
+                                            seed=rng.random() * 10, color=rng.choice(EV_COLORS)))
+        for f in self.flyers:
+            f["x"] += f["v"] * f["dir"] * dt
+        self.flyers = [f for f in self.flyers if -30 < f["x"] < LW + 30]
+
+        # ---- smoke and clouds
+        for pf in self.smoke:
+            pf[0] += pf[2] * dt
+            pf[1] += pf[3] * dt
+            pf[4] += dt
+        self.smoke = [pf for pf in self.smoke if pf[4] < pf[5]]
+        for c in self.clouds:
+            c[0] += c[3] * dt
+            if c[0] > LW + 40:
+                c[0], c[1] = -40, self.rng.uniform(15, 80)
+
+        self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
+
+    # ------------------------------------------------------------- drawing
+    def draw(self, s, phase=None):
+        global NIGHT
+        t = self.t
+        ef = self.era_f
+        era = int(ef)
+        if phase is None:
+            phase = (t / DAY_LEN + 0.28) % 1.0
+        sun = math.sin(phase * math.tau)
+        day = smooth(-0.12, 0.22, sun)
+        NIGHT = 1.0 - day
+        dusk = clamp(1 - abs(sun) / 0.28)
+        e0 = min(era + 1, len(SMOG) - 1)
+        smog = SMOG[era] + (SMOG[e0] - SMOG[era]) * (ef - era)
+
+        # sky
+        top = mix((12, 14, 40), (70, 145, 228), day)
+        bot = mix((35, 38, 80), (175, 215, 242), day)
+        bot = mix(bot, (245, 150, 95), dusk * 0.65)
+        top = mix(top, (110, 90, 150), dusk * 0.35)
+        top = mix(top, (150, 140, 120), smog * day)
+        bot = mix(bot, (185, 170, 145), smog * day)
+        for y in range(GROUND):
+            s.fill(mix(top, bot, y / GROUND), (0, y, LW, 1))
+
+        if NIGHT > 0.25:
+            k = (NIGHT - 0.25) / 0.75 * (1 - smog)
+            for sx, sy, b in self.stars:
+                tw = 0.6 + 0.4 * math.sin(t * 2 + sx)
+                s.set_at((sx, sy), mix(mix(top, bot, sy / GROUND), (255, 255, 235), k * b * tw))
+
+        if phase < 0.56:
+            sx, sy = LW * phase / 0.5, 150 - sun * 125
+            pygame.draw.circle(s, mix((255, 245, 190), (255, 170, 90), dusk), (int(sx), int(sy)), 7)
+        mp = (phase + 0.5) % 1.0
+        if mp < 0.56:
+            mx, my = LW * mp / 0.5, 150 - math.sin(mp * math.tau) * 125
+            pygame.draw.circle(s, (230, 230, 215), (int(mx), int(my)), 5)
+            s.set_at((int(mx) + 1, int(my) - 1), (200, 200, 190))
+            s.set_at((int(mx) - 2, int(my) + 1), (205, 205, 195))
+
+        cloud = mix(mix((255, 255, 255), (250, 190, 170), dusk * 0.6), (55, 58, 85), NIGHT)
+        cloud = mix(cloud, (170, 160, 145), smog)
+        for cx, cy, size, _ in self.clouds:
+            for i in range(size):
+                pygame.draw.circle(s, cloud, (int(cx + i * 5), int(cy + (i % 2) * 2)), 4 + (i % 3))
+
+        far_col = sh(mix(bot, (80, 100, 130), 0.55), 0.6)
+        pygame.draw.polygon(s, far_col, self.far + [(LW + 40, GROUND), (-40, GROUND)])
+        if ef > 6.8:
+            n = int(len(self.turbines) * clamp((ef - 6.8) * 2.5))
+            for tx in self.turbines[:n]:
+                ty = int(self.ridge_y(self.far, tx))
+                pole = sh((235, 238, 240), 0.6)
+                s.fill(pole, (tx, ty - 16, 1, 16))
+                for i in range(3):
+                    a = t * 2 + tx + i * math.tau / 3
+                    pygame.draw.line(s, pole, (tx, ty - 16), (tx + math.cos(a) * 7, ty - 16 + math.sin(a) * 7))
+                if NIGHT > 0.4 and int(t + tx) % 2:
+                    s.set_at((tx, ty - 17), (255, 50, 50))
+        near_col = sh(mix((80, 135, 75), (110, 120, 105), min(1, era / 7) * 0.5), 0.75)
+        pygame.draw.polygon(s, near_col, self.near + [(LW + 40, GROUND), (-40, GROUND)])
+
+        # buildings
+        for p in self.plots:
+            if p.kind == "nature":
+                draw_nature(s, p, era, t)
+            elif p.building:
+                draw_construction(s, p, t)
+            else:
+                draw_building(s, p, t)
+
+        # sidewalk and road
+        grass = sh((95, 150, 70))
+        if era <= 3:
+            s.fill(grass, (0, GROUND, LW, ROAD_TOP - GROUND))
+        else:
+            s.fill(sh((150, 140, 125) if era == 4 else (175, 175, 172)), (0, GROUND, LW, ROAD_TOP - GROUND))
+            s.fill(sh((120, 115, 110)), (0, ROAD_TOP - 1, LW, 1))
+        road_h = ROAD_BOT - ROAD_TOP
+        if era == 0:
+            s.fill(grass, (0, ROAD_TOP, LW, road_h))
+            R = random.Random(5)
+            for _ in range(LW // 6):
+                s.set_at((R.randrange(LW), ROAD_TOP + R.randrange(road_h)),
+                         sh(R.choice([(240, 230, 90), (240, 240, 240), (200, 120, 200)])))
+        elif era == 1:
+            s.fill(grass, (0, ROAD_TOP, LW, road_h))
+            s.fill(sh((150, 125, 85)), (0, ROAD_TOP + 6, LW, 5))
+        elif era <= 3:
+            s.fill(sh((145, 115, 78)), (0, ROAD_TOP, LW, road_h))
+            s.fill(sh((125, 98, 65)), (0, ROAD_TOP + 5, LW, 1))
+            s.fill(sh((125, 98, 65)), (0, ROAD_BOT - 5, LW, 1))
+        elif era == 4:
+            s.fill(sh((120, 112, 102)), (0, ROAD_TOP, LW, road_h))
+            for yy in range(ROAD_TOP + 1, ROAD_BOT, 3):
+                for xx in range((yy % 2) * 2, LW, 4):
+                    s.set_at((xx, yy), sh((100, 94, 88)))
+        else:
+            s.fill(sh((72, 72, 78) if era == 5 else (55, 56, 62)), (0, ROAD_TOP, LW, road_h))
+            line = sh((230, 200, 80) if era == 5 else (235, 235, 235))
+            for xx in range(0, LW, 10):
+                s.fill(line, (xx, ROAD_TOP + 8, 5, 1))
+            if era >= 7:
+                s.fill(sh((70, 160, 95)), (0, ROAD_BOT - 2, LW, 2))
+
+        # rail / grass strip / water
+        s.fill(grass, (0, ROAD_BOT, LW, WATER_Y - ROAD_BOT))
+        if era >= 4:
+            for xx in range(0, LW, 4):
+                s.fill(sh((110, 80, 55)), (xx, RAIL_Y, 2, 2))
+            s.fill(sh((150, 150, 160) if era < 7 else (190, 200, 210)), (0, RAIL_Y, LW, 1))
+        water = mix(sh(mix(bot, (30, 90, 130), 0.55), 0.5), (130, 115, 90), smog * 0.5)
+        for y in range(WATER_Y, LH):
+            s.fill(mix(water, mix(water, (5, 10, 25), 0.6), (y - WATER_Y) / (LH - WATER_Y)), (0, y, LW, 1))
+        s.fill(sh((170, 160, 130) if era < 5 else (160, 160, 165)), (0, WATER_Y, LW, 2))
+        for i in range(30):
+            sx = int((i * 53 + t * 6 * (1 + i % 3)) % LW)
+            sy = WATER_Y + 4 + (i * 7) % (LH - WATER_Y - 6)
+            s.fill(mix(water, (255, 255, 255), 0.25 * (1 - NIGHT * 0.6)), (sx, sy, 3, 1))
+        if NIGHT > 0.2:
+            for p in self.plots:
+                if p.kind != "nature" and p.level >= 4 and not p.building:
+                    for k in range(5):
+                        rx = p.x + p.w // 2 + int(math.sin(t * 3 + k * 1.7 + p.x) * 2)
+                        ry = WATER_Y + 4 + k * 5 + int(math.sin(t * 2 + k) * 1)
+                        s.fill(mix(water, (255, 210, 130), 0.45 * NIGHT), (rx - 1, ry, 3, 1))
+
+        # street lamps
+        if era >= 4:
+            for lx in range(8, LW, 30):
+                pole = sh((60, 60, 65))
+                if NIGHT > 0.2:
+                    pygame.draw.ellipse(s, mix(s.get_at((lx, ROAD_TOP + 2))[:3], (255, 230, 170), 0.4 * NIGHT),
+                                        (lx - 6, ROAD_TOP - 1, 13, 5))
+                s.fill(pole, (lx, ROAD_TOP - 11, 1, 11))
+                s.fill(pole, (lx, ROAD_TOP - 11, 3, 1))
+                s.fill(mix(sh((200, 200, 190)), (255, 230, 150), NIGHT), (lx + 2, ROAD_TOP - 10, 1, 1))
+
+        for m in self.movers:
+            draw_mover(s, m, t)
+        for tr in self.trains:
+            draw_train(s, tr, t)
+        for bt in self.boats:
+            draw_boat(s, bt, t)
+        for pf in self.smoke:
+            age = pf[4] / pf[5]
+            base = (70, 65, 65) if pf[6] else (200, 200, 200)
+            col = mix(sh(base, 0.6), mix(top, bot, clamp(pf[1] / GROUND)), age)
+            pygame.draw.circle(s, col, (int(pf[0]), int(pf[1])), int(1 + age * 3))
+        for f in self.flyers:
+            draw_flyer(s, f, t)
+
+
+# ----------------------------------------------------------------- run modes
+def run(args):
+    global LW
+    pygame.init()
+    if args.window:
+        screen = pygame.display.set_mode((1280, 720))
+    else:
+        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+        pygame.mouse.set_visible(False)
+    pygame.display.set_caption("Tiny City")
+    sw, sh_ = screen.get_size()
+    LW = max(320, int(round(LH * sw / sh_)))
+    world = World(args.era_minutes * 60)
+    canvas = pygame.Surface((LW, LH))
+    clock = pygame.time.Clock()
+    started = time.time()
+    pygame.event.clear()
+    start_mouse = pygame.mouse.get_pos()
+
+    running = True
+    while running:
+        dt = min(clock.tick(30) / 1000.0, 0.1)
+        settled = time.time() - started > 1.5
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                running = False
+            elif e.type == pygame.KEYDOWN:
+                if not args.window or e.key == pygame.K_ESCAPE:
+                    running = False
+                elif e.key == pygame.K_RIGHT:
+                    world.t = (int(world.era_f) + 1) * world.era_seconds
+            elif not args.window and settled:
+                if e.type == pygame.MOUSEBUTTONDOWN:
+                    running = False
+                elif e.type == pygame.MOUSEMOTION:
+                    if abs(e.pos[0] - start_mouse[0]) + abs(e.pos[1] - start_mouse[1]) > 12:
+                        running = False
+            elif e.type == pygame.MOUSEMOTION:
+                start_mouse = e.pos
+        world.update(dt)
+        world.draw(canvas)
+        pygame.transform.scale(canvas, screen.get_size(), screen)
+        pygame.display.flip()
+    pygame.quit()
+
+
+def idle_seconds():
+    """Seconds since the last keyboard/mouse input, or None if unknown."""
+    system = platform.system()
+    try:
+        if system == "Windows":
+            import ctypes
+
+            class LASTINPUTINFO(ctypes.Structure):
+                _fields_ = [("cbSize", ctypes.c_uint), ("dwTime", ctypes.c_uint)]
+            info = LASTINPUTINFO()
+            info.cbSize = ctypes.sizeof(info)
+            ctypes.windll.user32.GetLastInputInfo(ctypes.byref(info))
+            return ((ctypes.windll.kernel32.GetTickCount() - info.dwTime) & 0xFFFFFFFF) / 1000.0
+        if system == "Darwin":
+            out = subprocess.run(["ioreg", "-c", "IOHIDSystem"], capture_output=True, text=True).stdout
+            for line in out.splitlines():
+                if "HIDIdleTime" in line:
+                    return int(line.split("=")[-1].strip()) / 1e9
+            return None
+        out = subprocess.run(["xprintidle"], capture_output=True, text=True).stdout.strip()
+        return int(out) / 1000.0
+    except Exception:
+        return None
+
+
+def watch(args):
+    if idle_seconds() is None:
+        sys.exit("Couldn't read the idle time on this system. On Linux, install xprintidle (sudo apt install xprintidle).")
+    limit = args.idle_minutes * 60
+    print(f"Tiny City is watching. It will appear after {args.idle_minutes:g} idle minutes. Ctrl+C to stop.")
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable]
+    else:
+        cmd = [sys.executable, os.path.abspath(__file__)]
+    try:
+        while True:
+            time.sleep(2)
+            idle = idle_seconds() or 0
+            if idle >= limit:
+                subprocess.run(cmd + ["--era-minutes", str(args.era_minutes), "--away-offset", str(int(idle))])
+                time.sleep(3)
+    except KeyboardInterrupt:
+        print("\nBye!")
+
+
+def main():
+    argv = sys.argv[1:]
+    # Windows screensaver (.scr) arguments
+    if argv and argv[0][:2].lower() in ("/p", "/c"):
+        return
+    if argv and argv[0][:2].lower() == "/s":
+        argv = []
+    ap = argparse.ArgumentParser(description="Tiny City: an idle screen where civilisation evolves while you're away.")
+    ap.add_argument("--watch", action="store_true", help="wait in the background and start when the computer is idle")
+    ap.add_argument("--idle-minutes", type=float, default=5, help="idle minutes before starting (with --watch)")
+    ap.add_argument("--era-minutes", type=float, default=1.5, help="how long each era lasts (default 1.5)")
+    ap.add_argument("--fast", action="store_true", help="demo speed: 15 seconds per era")
+    ap.add_argument("--window", action="store_true", help="run in a window for testing")
+    ap.add_argument("--away-offset", type=float, default=0, help=argparse.SUPPRESS)
+    args = ap.parse_args(argv)
+    if args.fast:
+        args.era_minutes = 0.25
+    if args.watch:
+        watch(args)
+    else:
+        run(args)
+
+
+if __name__ == "__main__":
+    main()
