@@ -15,6 +15,8 @@ Leave your computer alone and an empty patch of wilderness slowly grows into hut
 | ![Industrial Age](docs/4-industrial-age.png) **Industrial Age**<br>Smokestacks and the first steam train. | ![Modern City](docs/5-modern-city.png) **Modern City**<br>Cars, apartment blocks, street lights. |
 | ![Metropolis](docs/6-metropolis.png) **Metropolis**<br>Skyscrapers, buses, planes. | ![Green Future](docs/7-green-future.png) **Green Future**<br>Vertical forests, drones, maglev trains. |
 
+With more than one monitor, the city stretches across all of them as one wide panorama, and cars and trains drive from one screen to the next.
+
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
 
 ## Install on Windows
@@ -52,7 +54,7 @@ python tiny_city.py --settings      open the settings window
 
 ## Where things are saved
 
-- The city: `%APPDATA%\TinyCity\city.sav` (`~/TinyCity/city.sav` on macOS and Linux). It's saved every 30 seconds and when you come back.
+- The city: `%APPDATA%\TinyCity\` (`~/TinyCity/` on macOS and Linux). It's saved every 30 seconds and when you come back.
 - Settings: `settings.json` in the same folder.
 
-A save made on a screen with a very different shape, such as an ultrawide monitor, is ignored and a new city starts, so the layout never looks stretched.
+Each screen setup keeps its own city. Your laptop on its own, and your laptop with a monitor plugged in, each grow separately, so plugging in a screen never wipes your progress. **Start a new city** in the settings window clears them all.

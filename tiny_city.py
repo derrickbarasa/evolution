@@ -7,6 +7,7 @@ huts, farms, castles, factories, skyscrapers and finally a green future city
 full of electric cars, drones, solar towers and maglev trains.
 Move the mouse or press any key to come back.
 The city is saved when you return and picks up where it left off next time.
+With several monitors it stretches across all of them as one wide city.
 
     pip install pygame
 
@@ -19,6 +20,7 @@ The city is saved when you return and picks up where it left off next time.
     python tiny_city.py --settings      choose the era length (also the screen saver's Settings button)
 """
 import argparse
+import glob
 import json
 import math
 import os
@@ -1074,9 +1076,15 @@ def save_path(name="city.sav"):
     return os.path.join(base, "TinyCity", name)
 
 
+def city_saves():
+    """Saved cities, newest first. Each screen setup (one screen, two screens...) keeps its own."""
+    paths = glob.glob(os.path.join(os.path.dirname(save_path()), "city*.sav"))
+    return sorted(paths, key=os.path.getmtime, reverse=True)
+
+
 def save_world(world):
     """Write the city to disk so the next idle session carries on from here."""
-    path = save_path()
+    path = save_path(f"city-{LW}.sav")
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path + ".tmp", "wb") as f:
@@ -1087,24 +1095,29 @@ def save_world(world):
 
 
 def load_world(lw, era_seconds):
-    """The saved city if it fits this screen shape (within 15%), else None."""
-    try:
-        with open(save_path(), "rb") as f:
-            data = pickle.load(f)
-        if data.get("version") != 1 or abs(data["lw"] - lw) > lw * 0.15:
-            return None
-        world, saved_lw = data["world"], data["lw"]
-    except Exception:
+    """The newest saved city that fits this screen shape (within 15%), else None."""
+    best = None
+    for path in city_saves():
+        try:
+            with open(path, "rb") as f:
+                data = pickle.load(f)
+        except Exception:
+            continue
+        if data.get("version") == 1 and abs(data["lw"] - lw) <= lw * 0.15:
+            if best is None or abs(data["lw"] - lw) < abs(best["lw"] - lw):
+                best = data
+    if best is None:
         return None
+    world, saved_lw = best["world"], best["lw"]
     world.t = world.era_f * era_seconds     # keep the same era if --era-minutes changed
     world.era_seconds = era_seconds
     return world, saved_lw
 
 
 def saved_city_summary():
-    """One line about the saved city, or None if there isn't one."""
+    """One line about the most recent saved city, or None if there isn't one."""
     try:
-        with open(save_path(), "rb") as f:
+        with open(city_saves()[0], "rb") as f:
             world = pickle.load(f)["world"]
     except Exception:
         return None
@@ -1191,10 +1204,11 @@ def configure():
 
     def new_city():
         if messagebox.askyesno("Start a new city", "Forget your city and start again from wilderness?", parent=root):
-            try:
-                os.remove(save_path())
-            except OSError:
-                pass
+            for path in city_saves():
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
             show_city()
     ttk.Button(city_box, text="Start a new city", command=new_city).grid(row=0, column=1, padx=(16, 0))
     show_city()
@@ -1223,20 +1237,74 @@ def configure():
 
 
 # ----------------------------------------------------------------- run modes
+def monitor_rects():
+    """Each monitor's (x, y, w, h) on the desktop in pixels, left to right. None if unknown."""
+    if platform.system() != "Windows":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        rects = []
+
+        def found(hmon, hdc, r, data):
+            r = r.contents
+            rects.append((r.left, r.top, r.right - r.left, r.bottom - r.top))
+            return 1
+        proc = ctypes.WINFUNCTYPE(ctypes.c_int, wintypes.HMONITOR, wintypes.HDC,
+                                  ctypes.POINTER(wintypes.RECT), wintypes.LPARAM)(found)
+        ctypes.windll.user32.EnumDisplayMonitors(None, None, proc, 0)
+        return sorted(rects) or None
+    except Exception:
+        return None
+
+
+def split_views(rects, lw=None):
+    """One wide city across all screens: each screen shows the next slice, left to right.
+    Returns the city width and a list of (slice of the canvas, place on the window)."""
+    widths = [LH * w / h for _, _, w, h in rects]
+    if lw is None:
+        lw = max(320, int(round(sum(widths))))
+    scale = lw / sum(widths)
+    views, x = [], 0
+    for i, (rx, ry, w, h) in enumerate(rects):
+        sw = lw - x if i == len(rects) - 1 else int(round(widths[i] * scale))
+        views.append((pygame.Rect(x, 0, sw, LH), pygame.Rect(rx, ry, w, h)))
+        x += sw
+    return lw, views
+
+
 def run(args):
     global LW
+    if platform.system() == "Windows":
+        try:
+            import ctypes
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)     # real pixels, so the art stays sharp
+        except Exception:
+            pass
+    rects = None if args.window else monitor_rects()
+    if rects and len(rects) > 1:     # one borderless window over every screen
+        vx, vy = min(r[0] for r in rects), min(r[1] for r in rects)
+        vw = max(r[0] + r[2] for r in rects) - vx
+        vh = max(r[1] + r[3] for r in rects) - vy
+        rects = [(x - vx, y - vy, w, h) for x, y, w, h in rects]
+        os.environ["SDL_VIDEO_WINDOW_POS"] = f"{vx},{vy}"
     pygame.init()
     if args.window:
         screen = pygame.display.set_mode((1280, 720))
+    elif rects and len(rects) > 1:
+        screen = pygame.display.set_mode((vw, vh), pygame.NOFRAME)
+        pygame.mouse.set_visible(False)
     else:
         screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
         pygame.mouse.set_visible(False)
     pygame.display.set_caption("Tiny City")
-    sw, sh_ = screen.get_size()
-    LW = max(320, int(round(LH * sw / sh_)))
+    if not rects or len(rects) == 1:
+        rects = [(0, 0) + screen.get_size()]
+    LW, views = split_views(rects)
     saved = None if args.new else load_world(LW, args.era_minutes * 60)
     if saved:
         world, LW = saved
+        LW, views = split_views(rects, LW)
     else:
         world = World(args.era_minutes * 60)
     canvas = pygame.Surface((LW, LH))
@@ -1271,7 +1339,8 @@ def run(args):
                 start_mouse = e.pos
         world.update(dt)
         world.draw(canvas)
-        pygame.transform.scale(canvas, screen.get_size(), screen)
+        for src, dst in views:
+            pygame.transform.scale(canvas.subsurface(src), dst.size, screen.subsurface(dst))
         pygame.display.flip()
     save_world(world)
     pygame.quit()
