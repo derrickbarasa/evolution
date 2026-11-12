@@ -66,6 +66,7 @@ CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
 EV_COLORS = [(240, 245, 250), (90, 200, 220), (120, 220, 150), (200, 205, 215), (250, 120, 160)]
 
+GREEN_ERAS = 2      # Green Future lasts this many eras before a new city begins
 SEASON_LEN = DAY_LEN * 3    # a year is 12 days
 WEATHER = [         # chance of each kind of weather in spring, summer, autumn, winter
     {"clear": 0.45, "cloudy": 0.2, "rain": 0.3, "storm": 0.05},
@@ -1395,13 +1396,24 @@ def configure():
     total = ttk.Label(frame, foreground="#666")
     total.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 14))
 
+    restart = tk.BooleanVar(value=settings.get("restart", True))
+    ttk.Checkbutton(frame, text="Start over after Green Future", variable=restart).grid(
+        row=4, column=0, columnspan=2, sticky="w", pady=(0, 14))
+
     def show_total(*_):
-        total.config(text=f"Green Future after about {fmt_minutes(minutes[era.get()] * (len(ERAS) - 1))} of idle time.")
+        m = minutes[era.get()]
+        text = f"Green Future after about {fmt_minutes(m * (len(ERAS) - 1))} of idle time"
+        if restart.get():
+            text += f",\nthen a new city begins {fmt_minutes(m * GREEN_ERAS)} later."
+        else:
+            text += "."
+        total.config(text=text)
     era.trace_add("write", show_total)
+    restart.trace_add("write", show_total)
     show_total()
 
     city_box = ttk.LabelFrame(frame, text="Your city", padding=10)
-    city_box.grid(row=4, column=0, columnspan=2, sticky="ew")
+    city_box.grid(row=5, column=0, columnspan=2, sticky="ew")
     city_box.columnconfigure(0, weight=1)
     city = ttk.Label(city_box)
     city.grid(row=0, column=0, sticky="w")
@@ -1422,6 +1434,7 @@ def configure():
 
     def ok(*_):
         settings["era_minutes"] = minutes[era.get()]
+        settings["restart"] = restart.get()
         try:
             save_settings(settings)
         except OSError as e:
@@ -1430,7 +1443,7 @@ def configure():
         root.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=5, column=0, columnspan=2, sticky="e", pady=(16, 0))
+    buttons.grid(row=6, column=0, columnspan=2, sticky="e", pady=(16, 0))
     ttk.Button(buttons, text="OK", command=ok, default="active").grid(row=0, column=0)
     ttk.Button(buttons, text="Cancel", command=root.destroy).grid(row=0, column=1, padx=(8, 0))
     root.bind("<Return>", ok)
@@ -1540,6 +1553,7 @@ def run(args):
     started = time.time()
     last_save = started
     fps = 20 if on_battery() else 30
+    restart_t = None        # seconds into the fade to a new city
     pygame.event.clear()
     start_mouse = pygame.mouse.get_pos()
 
@@ -1568,8 +1582,20 @@ def run(args):
             elif e.type == pygame.MOUSEMOTION:
                 start_mouse = e.pos
         world.update(dt)
+        if restart_t is None and args.restart and world.t >= world.era_seconds * (len(ERAS) - 1 + GREEN_ERAS):
+            restart_t = 0.0
+        light = 1.0
+        if restart_t is not None:       # fade to black, begin again from wilderness, fade back in
+            restart_t += dt
+            if restart_t >= 3.0 and world.t > world.era_seconds:
+                world = World(world.era_seconds)
+                save_world(world)
+            light = clamp(abs(restart_t - 3.0) / 3.0)
+            if restart_t >= 6.0:
+                restart_t = None
         world.draw(canvas)
         texture.update(canvas)
+        texture.color = (int(255 * light),) * 3
         renderer.draw_color = (0, 0, 0, 255)
         renderer.clear()
         for src, dst in views:
@@ -1643,6 +1669,9 @@ def main():
     ap.add_argument("--fast", action="store_true", help="demo speed: 15 seconds per era")
     ap.add_argument("--window", action="store_true", help="run in a window for testing")
     ap.add_argument("--new", action="store_true", help="forget the saved city and start from wilderness")
+    ap.add_argument("--no-restart", dest="restart", action="store_false",
+                    default=load_settings().get("restart", True),
+                    help="keep the finished city instead of starting over after Green Future")
     ap.add_argument("--away-offset", type=float, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.fast:

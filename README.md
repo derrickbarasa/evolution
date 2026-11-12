@@ -2,7 +2,7 @@
 
 A pixel-art screen saver where civilisation evolves while you're away.
 
-Leave your computer alone and an empty patch of wilderness slowly grows into huts, farms, castles, factories, skyscrapers and, finally, a green future city full of electric cars, drones, solar towers and maglev trains. Move the mouse or press a key to come back. Next time you step away, the city picks up where it left off.
+Leave your computer alone and an empty patch of wilderness slowly grows into huts, farms, castles, factories, skyscrapers and, finally, a green future city full of electric cars, drones, solar towers and maglev trains. Move the mouse or press a key to come back. Next time you step away, the city picks up where it left off. Once it has enjoyed the green future for a while, the screen fades out and a new city begins from wilderness.
 
 ![A metropolis at night](docs/hero.png)
 
@@ -55,7 +55,7 @@ copy dist\TinyCity.exe dist\TinyCity.scr
 
 Then right-click `dist\TinyCity.scr`, choose **Install**, set how many idle minutes to wait, and click **OK**.
 
-To pick how long each era lasts, click **Settings** in the screen saver dialog. The same window shows how far your city has grown and has a button to start a new one.
+To pick how long each era lasts, click **Settings** in the screen saver dialog. The same window shows how far your city has grown, has a button to start a new one, and lets you turn off starting over after Green Future if you'd rather keep your finished city.
 
 ## Run it directly
 
@@ -68,6 +68,7 @@ python tiny_city.py --fast          every era lasts 15 seconds (demo)
 python tiny_city.py --watch         sit in the background, start after 5 idle minutes
 python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
 python tiny_city.py --new           forget the saved city and start from wilderness
+python tiny_city.py --no-restart    keep the finished city instead of starting over after Green Future
 python tiny_city.py --settings      open the settings window
 ```
 
