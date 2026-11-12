@@ -57,10 +57,10 @@ TRAFFIC_RATE = [0, 0, 0.12, 0.2, 0.35, 0.6, 1.0, 0.9]
 WALK_RATE = [0, 0.08, 0.15, 0.2, 0.25, 0.35, 0.45, 0.45]
 SPEED = {"oxcart": 10, "horsecart": 14, "carriage": 16, "bicycle": 12, "vintage": 22,
          "oldbus": 20, "car": 30, "truck": 26, "bus": 25, "ev": 32, "ebus": 26,
-         "scooter": 13, "deer": 9, "walker": 8, "float": 7}
+         "scooter": 13, "deer": 9, "walker": 8, "float": 7, "fireengine": 40}
 LENGTH = {"oxcart": 15, "horsecart": 15, "carriage": 15, "bicycle": 5, "vintage": 10,
           "oldbus": 18, "car": 11, "truck": 17, "bus": 20, "ev": 12, "ebus": 22,
-          "scooter": 4, "deer": 5, "walker": 2, "float": 24}
+          "scooter": 4, "deer": 5, "walker": 2, "float": 24, "fireengine": 17}
 CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
               (40, 40, 45), (60, 150, 90), (230, 120, 40), (150, 155, 165)]
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
@@ -181,6 +181,8 @@ def pick_building(level, w, rng):
 
 
 class Plot:
+    ruined = False      # burnt down, waiting to be rebuilt
+
     def __init__(self, x, w, rng):
         self.x, self.w = x, w
         self.rank = rng.random()
@@ -194,6 +196,7 @@ class Plot:
         self.kind, self.h, self.variant = pick_building(era, self.w, rng)
         self.seed = rng.randrange(1 << 30)
         self.building, self.progress, self.build_time = True, 0.0, build_time
+        self.ruined = False
 
     def full_height(self):
         if self.kind == "factory":
@@ -465,6 +468,30 @@ def draw_building(s, p, t):
         s.set_at((px, g - 4), (190, 255, 130) if int(t * 2) % 2 else (40, 120, 70))
 
 
+def draw_ruins(s, p, t):
+    """What's left after a fire: charred rubble and a broken wall."""
+    R = random.Random(p.seed)
+    char, ash = sh((60, 52, 48)), sh((100, 92, 86))
+    for xx in range(p.x + 1, p.x + p.w - 1):
+        hgt = 2 + R.randint(0, 5)
+        s.fill(char if R.random() < 0.6 else ash, (xx, GROUND - hgt, 1, hgt))
+    wx = p.x + 2 + R.randrange(max(1, p.w - 6))
+    s.fill(char, (wx, GROUND - 13, 2, 13))
+    s.fill(char, (wx + 2, GROUND - 9, 2, 9))
+
+
+def draw_flames(s, p, t, i):
+    """A building on fire."""
+    top = GROUND - p.h
+    for k in range(p.w // 2):
+        fh = 3 + int(abs(math.sin(t * 11 + k * 1.3 + i)) * 7)
+        s.fill((255, 110 + int(110 * abs(math.sin(t * 7 + k))), 30), (p.x + 1 + k * 2, top - fh + 3, 2, fh))
+    R = random.Random(int(t * 10) * 7 + i)
+    for _ in range(p.w * p.h // 25):
+        s.set_at((p.x + R.randrange(p.w), top + R.randrange(max(1, p.h))),
+                 R.choice([(255, 140, 40), (255, 200, 60), (200, 60, 30)]))
+
+
 def draw_construction(s, p, t):
     s.fill(sh((120, 95, 70)), (p.x, GROUND - 1, p.w, 1))
     full = p.full_height()
@@ -609,6 +636,19 @@ def draw_mover(s, m, t):
         P(3, 0, 2, 2, dark)
         P(16, 0, 2, 2, dark)
         P(21, 2, 1, 1, mix(dark, (180, 255, 255), 0.5 + 0.5 * NIGHT))
+    elif k == "fireengine":
+        P(0, 1, 17, 6, sh((200, 35, 35)))
+        P(12, 4, 4, 2, glass)
+        P(1, 7, 10, 1, sh((200, 200, 205)))
+        for i in range(2, 11, 3):
+            P(i, 6, 1, 1, sh((200, 200, 205)))
+        P(1, 3, 10, 1, sh((230, 230, 230)))
+        P(2, 0, 2, 2, dark)
+        P(12, 0, 2, 2, dark)
+        blink = int(t * 8) % 2
+        P(13, 7, 1, 1, (255, 40, 40) if blink else (60, 120, 255))
+        P(14, 7, 1, 1, (60, 120, 255) if blink else (255, 40, 40))
+        P(16, 2, 1, 1, lamp)
     elif k == "float":      # carnival parade float: a decorated platform with dancers
         def C(dx, dy, r, col):
             pygame.draw.circle(s, col, (int(x + dx if d > 0 else x - dx), int(b - dy)), r)
@@ -829,6 +869,8 @@ class World:
         self.show = 0.0                     # seconds of fireworks left
         self.festival, self.festival_timer = 0.0, 300.0
         self.festival_kind, self.fair_x = "", LW // 2
+        self.hardship, self.hard_t, self.hard_timer = None, 0.0, 900.0   # fire, flood or plague
+        self.burning, self.spread, self.mud = [], False, 0.0
         self.rockets, self.sparks = [], []  # rocket: [x, y, vy, colour]; spark: [x, y, vx, vy, age, life, colour]
 
     def __setstate__(self, state):      # cities saved before there was weather or events
@@ -865,7 +907,7 @@ class World:
         return YEARS[e] + (YEARS[e + 1] - YEARS[e]) * (ef - e)
 
     def population(self):
-        n = sum(POP.get(p.kind, 0) for p in self.plots if p.kind != "nature" and not p.building)
+        n = sum(POP.get(p.kind, 0) for p in self.plots if p.kind != "nature" and not p.building and not p.ruined)
         return n * 10 + sum(1 for m in self.movers if m["kind"] != "deer")
 
     def puff(self, x, y, size=1.0, dark=False):
@@ -891,22 +933,29 @@ class World:
 
         # ---- the city grows
         rate = 6.0 / self.era_seconds
-        for p in self.plots:
+        for i, p in enumerate(self.plots):
             if p.building:
                 p.progress += dt / p.build_time
                 if p.progress >= 1.0:
                     p.progress, p.building = 1.0, False
-            elif (p.kind == "nature" and p.rank < DENSITY[era]) or (p.kind != "nature" and p.level < era):
-                if rng.random() < dt * rate:
+            elif i in self.burning:
+                continue
+            elif (p.ruined or (p.kind == "nature" and p.rank < DENSITY[era])
+                  or (p.kind != "nature" and p.level < era)):
+                if rng.random() < dt * rate * (4 if p.ruined else 1):     # ruins are rebuilt first
                     p.start(era, rng, clamp(self.era_seconds * rng.uniform(0.05, 0.1), 2.0, 14.0))
-            if not p.building:
+            if p.ruined:
+                if rng.random() < dt * 0.6:     # still smouldering
+                    self.puff(p.x + p.w // 2, GROUND - 6, 0.7)
+            elif not p.building:
                 if p.kind == "factory" and rng.random() < dt * 5:
                     self.puff(p.x + p.w - 4, GROUND - p.variant - 1, 1.3, dark=True)
                 elif p.kind == "hut" and p.variant and rng.random() < dt * 1.2:
                     self.puff(min(p.x + p.w - 2, p.x + min(p.w - 4, 14) + 4), GROUND - 4, 0.6)
 
         # ---- traffic, walkers and wildlife
-        if rng.random() < dt * WALK_RATE[era] * (4 if self.festival > 0 else 1):
+        crowd = 4 if self.festival > 0 else 0.15 if self.hardship == "plague" else 1
+        if rng.random() < dt * WALK_RATE[era] * crowd:
             d, x, v = self.spawn_side(2, SPEED["walker"])
             shirts = [(130, 90, 60), (110, 80, 50)] if era <= 2 else \
                      [(200, 60, 60), (60, 90, 200), (240, 200, 60), (80, 160, 90), (230, 230, 230), (160, 80, 180)]
@@ -952,7 +1001,7 @@ class World:
         # ---- trains
         if era >= 4:
             self.train_timer -= dt
-            if self.train_timer <= 0 and not self.trains:
+            if self.train_timer <= 0 and not self.trains and self.hardship != "flood":
                 kind = ["steam", "diesel", "commuter", "maglev"][era - 4]
                 d = 1 if rng.random() < 0.5 else -1
                 cars = rng.randint(3, 5)
@@ -1023,6 +1072,7 @@ class World:
 
         self.update_weather(dt)
         self.update_events(dt, era)
+        self.update_hardship(dt, era)
         self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
 
     def start_festival(self, era):
@@ -1035,6 +1085,68 @@ class World:
             p = rng.choice(parks)
             self.festival_kind, self.festival, self.fair_x = "carnival", 70.0, p.x + p.w // 2
 
+    def start_hardship(self, kind, era):
+        rng = self.rng
+        self.hardship, self.hard_t = kind, {"fire": 20.0, "flood": 30.0, "plague": 45.0}[kind]
+        if kind == "fire":
+            built = [i for i, p in enumerate(self.plots) if p.kind != "nature" and not p.building and not p.ruined]
+            self.burning, self.spread = [rng.choice(built)], False
+            if era >= 4:        # the fire brigade races in
+                d, x, v = self.spawn_side(LENGTH["fireengine"], SPEED["fireengine"])
+                self.movers.append(dict(kind="fireengine", x=x, base=LANE_R if d > 0 else LANE_L, dir=d, v=v,
+                                        color=(200, 35, 35), seed=rng.random() * 10))
+
+    def update_hardship(self, dt, era):
+        """Now and then the city has hard times - a fire, a flood, a plague - and then recovers."""
+        rng = self.rng
+        self.mud = max(0.0, self.mud - dt / 40)
+        if self.hardship is None:
+            self.hard_timer -= dt
+            if self.hard_timer <= 0 and self.festival <= 0:
+                self.hard_timer = rng.uniform(900, 1500)
+                kinds = []
+                if 1 <= era <= 6 and any(p.kind != "nature" and not p.building and not p.ruined
+                                         for p in self.plots):
+                    kinds += ["fire"] * 3
+                if era >= 1:
+                    kinds += ["flood"] * 2
+                if era in (3, 4):
+                    kinds += ["plague"] * 2
+                if kinds:
+                    self.start_hardship(rng.choice(kinds), era)
+            return
+
+        self.hard_t -= dt
+        if self.hardship == "fire":
+            for i in self.burning:
+                p = self.plots[i]
+                if rng.random() < dt * 10:
+                    self.puff(p.x + rng.uniform(1, p.w - 1), GROUND - p.h - 2, 1.6, dark=True)
+            if not self.spread and self.hard_t < 14:     # sometimes it spreads next door
+                self.spread = True
+                i = self.burning[0]
+                for j in (i - 1, i + 1):
+                    if 0 <= j < len(self.plots) and rng.random() < 0.4:
+                        q = self.plots[j]
+                        if q.kind != "nature" and not q.building and not q.ruined:
+                            self.burning.append(j)
+                            break
+            if self.hard_t <= 0:
+                for i in self.burning:
+                    self.plots[i].ruined = True
+                self.burning = []
+        if self.hard_t <= 0:
+            if self.hardship == "flood":
+                self.mud = 1.0
+            elif self.hardship == "plague":
+                self.festival_timer = min(self.festival_timer, 15.0)     # the town celebrates getting through it
+            self.hardship = None
+
+    def flood_level(self):
+        if self.hardship != "flood":
+            return 0.0
+        return clamp(min((30.0 - self.hard_t) / 6, self.hard_t / 8, 1.0))
+
     def update_events(self, dt, era):
         rng = self.rng
         # ---- a town festival every so often, if the weather is fine
@@ -1042,7 +1154,7 @@ class World:
         if self.festival > 0:
             self.festival = max(0.0, self.festival - dt)
         elif self.festival_timer <= 0:
-            if era >= 1 and self.weather in ("clear", "cloudy"):
+            if era >= 1 and self.weather in ("clear", "cloudy") and self.hardship is None:
                 self.start_festival(era)
             self.festival_timer = rng.uniform(400, 800)
         if self.festival > 0:
@@ -1309,8 +1421,12 @@ class World:
                 draw_nature(s, p, era, t)
             elif p.building:
                 draw_construction(s, p, t)
+            elif p.ruined:
+                draw_ruins(s, p, t)
             else:
                 draw_building(s, p, t)
+        for i in self.burning:
+            draw_flames(s, self.plots[i], t, i)
 
         # sidewalk and road
         grass = mix(sh(mix((95, 150, 70), (150, 145, 70), AUTUMN * 0.4)), sh(SNOW_COLOR), SNOW)
@@ -1349,7 +1465,7 @@ class World:
                 s.fill(sh((70, 160, 95)), (0, ROAD_BOT - 2, LW, 2))
 
         # rail / grass strip / water
-        s.fill(grass, (0, ROAD_BOT, LW, WATER_Y - ROAD_BOT))
+        s.fill(mix(grass, sh((115, 95, 65)), self.mud * 0.8), (0, ROAD_BOT, LW, WATER_Y - ROAD_BOT))
         if era >= 4:
             for xx in range(0, LW, 4):
                 s.fill(sh((110, 80, 55)), (xx, RAIL_Y, 2, 2))
@@ -1358,6 +1474,13 @@ class World:
         for y in range(WATER_Y, LH):
             s.fill(mix(water, mix(water, (5, 10, 25), 0.6), (y - WATER_Y) / (LH - WATER_Y)), (0, y, LW, 1))
         s.fill(sh((170, 160, 130) if era < 5 else (160, 160, 165)), (0, WATER_Y, LW, 2))
+        flood = self.flood_level()
+        if flood > 0:       # the river has risen over the bank and the railway
+            rise = int(flood * (WATER_Y - ROAD_BOT + 1))
+            s.fill(mix(water, (110, 95, 70), 0.35), (0, WATER_Y - rise, LW, rise + 2))
+            for i in range(12):
+                sx = int((i * 41 + t * 9) % LW)
+                s.fill(mix(water, (255, 255, 255), 0.3 * (1 - NIGHT * 0.6)), (sx, WATER_Y - rise + 1 + i % 3, 4, 1))
         for i in range(30):
             sx = int((i * 53 + t * 6 * (1 + i % 3)) % LW)
             sy = WATER_Y + 4 + (i * 7) % (LH - WATER_Y - 6)
@@ -1419,6 +1542,9 @@ class World:
         if self.flash > 0:
             v = int(self.flash * 60)
             s.fill((v, v, v), special_flags=pygame.BLEND_RGB_ADD)
+        if self.hardship == "plague":     # a sickly, quiet tint over the town
+            k = clamp(min((45.0 - self.hard_t) / 5, self.hard_t / 5, 1.0))
+            s.fill((int(255 - 50 * k), int(255 - 35 * k), int(255 - 60 * k)), special_flags=pygame.BLEND_RGB_MULT)
 
 
 # ----------------------------------------------------------------- saving
