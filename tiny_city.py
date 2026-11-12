@@ -57,10 +57,12 @@ TRAFFIC_RATE = [0, 0, 0.12, 0.2, 0.35, 0.6, 1.0, 0.9]
 WALK_RATE = [0, 0.08, 0.15, 0.2, 0.25, 0.35, 0.45, 0.45]
 SPEED = {"oxcart": 10, "horsecart": 14, "carriage": 16, "bicycle": 12, "vintage": 22,
          "oldbus": 20, "car": 30, "truck": 26, "bus": 25, "ev": 32, "ebus": 26,
-         "scooter": 13, "deer": 9, "walker": 8, "float": 7, "fireengine": 40}
+         "scooter": 13, "deer": 9, "walker": 8, "float": 7, "fireengine": 40,
+         "wolf": 15, "bear": 5, "rabbit": 11, "sheep": 7, "pigeon": 3}
 LENGTH = {"oxcart": 15, "horsecart": 15, "carriage": 15, "bicycle": 5, "vintage": 10,
           "oldbus": 18, "car": 11, "truck": 17, "bus": 20, "ev": 12, "ebus": 22,
-          "scooter": 4, "deer": 5, "walker": 2, "float": 24, "fireengine": 17}
+          "scooter": 4, "deer": 5, "walker": 2, "float": 24, "fireengine": 17,
+          "wolf": 7, "bear": 11, "rabbit": 4, "sheep": 7, "pigeon": 3}
 CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
               (40, 40, 45), (60, 150, 90), (230, 120, 40), (150, 155, 165)]
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
@@ -636,6 +638,41 @@ def draw_mover(s, m, t):
         P(3, 0, 2, 2, dark)
         P(16, 0, 2, 2, dark)
         P(21, 2, 1, 1, mix(dark, (180, 255, 255), 0.5 + 0.5 * NIGHT))
+    elif k == "wolf":
+        grey = sh((125, 125, 130))
+        P(step, 0, 1, 2, grey)
+        P(4 - step, 0, 1, 2, grey)
+        P(0, 2, 5, 2, grey)
+        P(5, 3, 2, 2, grey)
+        P(7, 3, 1, 1, sh((80, 80, 85)))
+        P(6, 5, 1, 1, grey)
+        P(-1, 3, 1, 1, sh((100, 100, 105)))
+    elif k == "bear":
+        brown = sh((95, 65, 40))
+        P(1 + step, 0, 2, 1, brown)
+        P(6 - step, 0, 2, 1, brown)
+        P(0, 1, 8, 4, brown)
+        P(2, 5, 3, 1, brown)
+        P(8, 2, 3, 3, brown)
+        P(8, 5, 1, 1, brown)
+        P(10, 2, 1, 1, sh((50, 35, 25)))
+    elif k == "rabbit":
+        hop = int(abs(math.sin(t * 10 + m["seed"])) * 3)
+        fur = sh((165, 145, 125))
+        P(0, hop, 3, 2, fur)
+        P(3, 1 + hop, 1, 2, fur)
+        P(3, 3 + hop, 1, 2, fur)
+        P(-1, 1 + hop, 1, 1, sh((235, 235, 230)))
+    elif k == "sheep":
+        P(1, 0, 1, 1, sh((60, 55, 55)))
+        P(3, 0, 1, 1, sh((60, 55, 55)))
+        P(0, 1, 5, 3, sh((235, 233, 222)))
+        P(5, 2, 2, 2, sh((60, 55, 55)))
+    elif k == "pigeon":
+        peck = int(t * 4 + m["seed"]) % 2
+        P(0, 0, 2, 2, sh((130, 130, 145)))
+        P(1, 1, 1, 1, sh((100, 140, 130)))
+        P(2, 1 - peck, 1, 1, sh((120, 120, 135)))
     elif k == "fireengine":
         P(0, 1, 17, 6, sh((200, 35, 35)))
         P(12, 4, 4, 2, glass)
@@ -764,6 +801,56 @@ def draw_boat(s, bt, t):
         P(4, 6, 14, 1, sh((40, 70, 150)))
 
 
+def draw_grazer(s, g, t):
+    """A cow, sheep or goat on the riverbank: grazing with its head down, or ambling along."""
+    x, b, d = g["x"], g["y"], g["dir"]
+    head = 1 if g["walk"] <= 0 else 3
+    step = int(t * 5 + g["seed"]) % 2 if g["walk"] > 0 else 0
+
+    def P(dx, dy, w, h, col):
+        part(s, x, b, d, dx, dy, w, h, col)
+
+    legs = sh((60, 50, 45))
+    if g["kind"] == "cow":
+        P(1 + step, 0, 1, 2, legs)
+        P(6 - step, 0, 1, 2, legs)
+        P(0, 2, 8, 3, sh((240, 238, 230)))
+        P(2, 3, 2, 2, sh((40, 38, 38)))
+        P(5, 4, 2, 1, sh((40, 38, 38)))
+        P(8, head, 2, 2, sh((240, 238, 230)))
+        P(9, head, 1, 1, sh((230, 160, 150)))
+        P(-1, 2, 1, 2, legs)
+    elif g["kind"] == "sheep":
+        P(1, 0, 1, 1, legs)
+        P(3, 0, 1, 1, legs)
+        P(0, 1, 5, 3, sh((235, 233, 222)))
+        P(5, head - 1, 2, 2, legs)
+    else:   # goat
+        fur = sh((200, 188, 165))
+        P(1 + step, 0, 1, 2, legs)
+        P(4 - step, 0, 1, 2, legs)
+        P(0, 2, 5, 2, fur)
+        P(5, head, 2, 2, fur)
+        P(5, head + 2, 1, 1, legs)
+        P(-1, 3, 1, 1, fur)
+
+
+def draw_ducks(s, dk, t):
+    """A duck paddling along with her ducklings in a line behind."""
+    x, b, d = dk["x"], dk["y"], dk["dir"]
+
+    def P(dx, dy, w, h, col):
+        part(s, x, b + int(math.sin(t * 3 + dk["seed"]) * 0.8), d, dx, dy, w, h, col)
+
+    P(0, 0, 4, 2, sh((120, 90, 60)))
+    P(3, 2, 2, 2, sh((40, 110, 70)) if int(dk["seed"]) % 2 else sh((120, 90, 60)))
+    P(5, 2, 1, 1, sh((235, 150, 40)))
+    for i in range(dk["n"]):
+        bob = int(math.sin(t * 4 + i * 1.3) * 0.8)
+        part(s, x, b + 1 + bob, d, -4 - i * 4, 0, 2, 1, sh((240, 215, 80)))
+        part(s, x, b + 1 + bob, d, -3 - i * 4, 1, 1, 1, sh((240, 215, 80)))
+
+
 def draw_flyer(s, f, t):
     k, x, y, d = f["kind"], int(f["x"]), int(f["y"] + math.sin(t * 2 + f["seed"]) * 1.5), f["dir"]
 
@@ -800,6 +887,15 @@ def draw_flyer(s, f, t):
         P(8, -1, 2, 1, mix((60, 160, 255), (160, 240, 255), (t * 5 + 0.5) % 1))
         P(0, 0, 11, 2, sh(f["color"]))
         P(2, 2, 6, 2, mix(sh((150, 190, 210)), (255, 230, 160), NIGHT * 0.6))
+    elif k == "bat":
+        y += int(math.sin(t * 9 + f["seed"]) * 3)
+        col = sh((35, 30, 40), 0.3)
+        flap = int(t * 12 + f["seed"]) % 2
+        s.set_at((x, y), col)
+        s.set_at((x - 1, y - flap), col)
+        s.set_at((x + 1, y - flap), col)
+        s.set_at((x - 2, y + flap - 1), col)
+        s.set_at((x + 2, y + flap - 1), col)
     elif k == "balloon":
         i = int(f["seed"])
         a, b = BALLOON_COLORS[i % 5], BALLOON_COLORS[(i + 2) % 5]
@@ -859,6 +955,10 @@ class World:
         self.train_timer = 6.0
         self.init_weather()
         self.init_events()
+        self.init_wildlife()
+
+    def init_wildlife(self):
+        self.grazers, self.ducks, self.jumps = [], [], []     # riverbank animals, duck families, leaping fish
 
     def init_weather(self):
         self.weather, self.weather_timer = "clear", 30.0
@@ -876,6 +976,7 @@ class World:
     def __setstate__(self, state):      # cities saved before there was weather or events
         self.init_weather()
         self.init_events()
+        self.init_wildlife()
         self.__dict__.update(state)
 
     @property
@@ -979,8 +1080,9 @@ class World:
                                         skin=(230, 190, 150), skin2=rng.choice(CAR_COLORS), seed=rng.random() * 10))
         if era <= 1 and rng.random() < dt * 0.04:
             d, x, v = self.spawn_side(5, SPEED["deer"])
-            self.movers.append(dict(kind="deer", x=x, base=rng.choice((LANE_R, LANE_L)), dir=d, v=v,
+            self.movers.append(dict(kind="deer", x=x, base=LANE_R if d > 0 else LANE_L, dir=d, v=v,
                                     color=(0, 0, 0), seed=rng.random() * 10))
+        self.update_wildlife(dt, era)
 
         for lane in (LANE_R, LANE_L):
             cars = sorted([m for m in self.movers if m["base"] == lane], key=lambda m: m["x"] * m["dir"], reverse=True)
@@ -996,7 +1098,7 @@ class World:
                 m["cur"] = v
         for m in self.movers:
             m["x"] += m.get("cur", m["v"]) * m["dir"] * dt
-        self.movers = [m for m in self.movers if -40 < m["x"] < LW + 40]
+        self.movers = [m for m in self.movers if (m["x"] < LW + 40 if m["dir"] > 0 else m["x"] > -40)]
 
         # ---- trains
         if era >= 4:
@@ -1034,7 +1136,7 @@ class World:
 
         # ---- things in the sky
         options = []
-        if era <= 4:
+        if era <= 4 and NIGHT < 0.6:
             options += [("bird", 0.12)]
         if era == 5:
             options += [("biplane", 0.02)]
@@ -1044,14 +1146,16 @@ class World:
             options += [("drone", 0.15), ("flycar", 0.05), ("plane", 0.02)]
         if era >= 4 and self.cloud < 0.4 and not any(f["kind"] == "balloon" for f in self.flyers):
             options += [("balloon", 0.012)]
+        if era <= 3 and NIGHT > 0.6:
+            options += [("bat", 0.08)]
         for kind, r in options:
             if rng.random() < dt * r:
                 d, x, v = self.spawn_side(10, {"bird": 14, "biplane": 18, "plane": 30, "drone": 12, "flycar": 26,
-                                               "balloon": 4}[kind])
+                                               "balloon": 4, "bat": 16}[kind])
                 y = {"bird": rng.uniform(40, 110), "biplane": rng.uniform(40, 80), "plane": rng.uniform(15, 45),
                      "drone": rng.uniform(60, 150), "flycar": rng.uniform(55, 115),
-                     "balloon": rng.uniform(55, 110)}[kind]
-                n = rng.randint(3, 6) if kind == "bird" else 1
+                     "balloon": rng.uniform(55, 110), "bat": rng.uniform(90, 160)}[kind]
+                n = rng.randint(3, 6) if kind == "bird" else rng.randint(1, 3) if kind == "bat" else 1
                 for i in range(n):
                     self.flyers.append(dict(kind=kind, x=x - i * 5 * d, y=y + (i % 2) * 3 + i, dir=d, v=v,
                                             seed=rng.random() * 10, color=rng.choice(EV_COLORS)))
@@ -1084,6 +1188,66 @@ class World:
         if era >= 4 and parks and rng.random() < 0.35:
             p = rng.choice(parks)
             self.festival_kind, self.festival, self.fair_x = "carnival", 70.0, p.x + p.w // 2
+
+    def update_wildlife(self, dt, era):
+        rng = self.rng
+        # ---- wild animals on the paths, sheep being walked through town, pigeons on the pavement
+        if era <= 1:
+            for kind, r in (("wolf", 0.015), ("bear", 0.006), ("rabbit", 0.05)):
+                if rng.random() < dt * r:
+                    d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind])
+                    base = LANE_R if d > 0 else LANE_L
+                    for i in range(rng.randint(2, 3) if kind == "wolf" else 1):     # wolves come in packs
+                        self.movers.append(dict(kind=kind, x=x - i * 10 * d, base=base, dir=d, v=v,
+                                                color=(0, 0, 0), seed=rng.random() * 10))
+        if 2 <= era <= 3 and self.era_f < 3.6 and rng.random() < dt * 0.012:
+            d, x, v = self.spawn_side(LENGTH["sheep"], SPEED["sheep"])
+            n = rng.randint(4, 7)
+            for i in range(n):
+                self.movers.append(dict(kind="sheep", x=x - i * rng.uniform(6, 9) * d, base=WALK_Y, dir=d, v=v,
+                                        color=(0, 0, 0), seed=rng.random() * 10))
+            self.movers.append(dict(kind="walker", x=x - (n * 8 + 4) * d, base=WALK_Y, dir=d, v=v,
+                                    color=(110, 80, 50), skin=(200, 150, 110), seed=rng.random() * 10, dog=True))
+        if era >= 4 and rng.random() < dt * 0.05:
+            d, x, v = self.spawn_side(LENGTH["pigeon"], SPEED["pigeon"])
+            for i in range(rng.randint(1, 3)):
+                self.movers.append(dict(kind="pigeon", x=x - i * 4 * d, base=WALK_Y, dir=d, v=v * rng.uniform(0.7, 1.3),
+                                        color=(0, 0, 0), seed=rng.random() * 10))
+
+        # ---- cows, sheep and goats grazing on the riverbank, until the railway (or a flood) comes
+        leave = not 1 <= era <= 3 or self.hardship == "flood"
+        if not leave and len(self.grazers) < 5 and rng.random() < dt * 0.05:
+            d = rng.choice((1, -1))
+            kinds = ["goat"] if era == 1 else ["cow", "cow", "sheep", "sheep", "goat"]
+            self.grazers.append(dict(kind=rng.choice(kinds), x=-10 if d > 0 else LW + 10,
+                                     y=rng.randint(ROAD_BOT + 7, WATER_Y - 1), dir=d,
+                                     walk=rng.uniform(4, 14), seed=rng.random() * 10))
+        for g in self.grazers:
+            if leave:
+                g["walk"] = max(g["walk"], 1.0)
+                g["x"] += 6 * g["dir"] * dt
+            elif g["walk"] > 0:
+                g["walk"] -= dt
+                g["x"] += 4 * g["dir"] * dt
+            elif rng.random() < dt * 0.2:
+                g["walk"] = rng.uniform(1, 3)
+                if rng.random() < 0.4:
+                    g["dir"] *= -1
+        self.grazers = [g for g in self.grazers if -14 < g["x"] < LW + 14]
+
+        # ---- ducks on the river and fish jumping
+        if len(self.ducks) < 2 and rng.random() < dt * 0.02:
+            d, x, v = self.spawn_side(20, 3)
+            self.ducks.append(dict(x=x, y=rng.randint(WATER_Y + 8, LH - 6), dir=d, v=v,
+                                   n=rng.randint(0, 4), seed=rng.random() * 10))
+        for dk in self.ducks:
+            dk["x"] += dk["v"] * dk["dir"] * dt
+        self.ducks = [dk for dk in self.ducks if -30 < dk["x"] < LW + 30]
+        if rng.random() < dt * 0.12:
+            self.jumps.append([rng.uniform(10, LW - 10), rng.randint(WATER_Y + 7, LH - 4), 0.0, rng.choice((1, -1))])
+        for j in self.jumps:
+            j[2] += dt
+        self.jumps = [j for j in self.jumps if j[2] < 1.2]
 
     def start_hardship(self, kind, era):
         rng = self.rng
@@ -1427,6 +1591,16 @@ class World:
                 draw_building(s, p, t)
         for i in self.burning:
             draw_flames(s, self.plots[i], t, i)
+        if 1.0 <= sf < 2.0 and NIGHT > 0.6 and era <= 5:     # fireflies among the trees on summer nights
+            for p in self.plots:
+                if p.kind == "nature":
+                    R = random.Random(p.tree_seed)
+                    for k in range(p.w // 4):
+                        glow = math.sin(t * 3 + R.uniform(0, 6))
+                        if glow > 0.2:
+                            fx = p.x + R.uniform(0, p.w) + math.sin(t * 0.7 + k) * 3
+                            fy = GROUND - 3 - R.uniform(0, 14) + math.sin(t * 1.1 + k * 2) * 2
+                            s.set_at((int(fx), int(fy)), mix(sh((60, 70, 40)), (230, 255, 120), glow * NIGHT))
 
         # sidewalk and road
         grass = mix(sh(mix((95, 150, 70), (150, 145, 70), AUTUMN * 0.4)), sh(SNOW_COLOR), SNOW)
@@ -1470,6 +1644,8 @@ class World:
             for xx in range(0, LW, 4):
                 s.fill(sh((110, 80, 55)), (xx, RAIL_Y, 2, 2))
             s.fill(sh((150, 150, 160) if era < 7 else (190, 200, 210)), (0, RAIL_Y, LW, 1))
+        for g in sorted(self.grazers, key=lambda g: g["y"]):
+            draw_grazer(s, g, t)
         water = mix(sh(mix(bot, (30, 90, 130), 0.55), 0.5), (130, 115, 90), smog * 0.5)
         for y in range(WATER_Y, LH):
             s.fill(mix(water, mix(water, (5, 10, 25), 0.6), (y - WATER_Y) / (LH - WATER_Y)), (0, y, LW, 1))
@@ -1513,6 +1689,18 @@ class World:
             draw_train(s, tr, t)
         for bt in self.boats:
             draw_boat(s, bt, t)
+        for dk in self.ducks:
+            draw_ducks(s, dk, t)
+        splash = mix(water, (255, 255, 255), 0.6 * (1 - NIGHT * 0.5))
+        for x, y, age, d in self.jumps:       # a fish leaps out and drops back with a splash
+            ph = age / 0.8
+            if ph < 1:
+                s.fill(sh((190, 200, 205)), (int(x + d * ph * 6), int(y - math.sin(math.pi * ph) * 6), 2, 1))
+            if ph < 0.15 or ph > 0.85:
+                sx = int(x + (d * 6 if ph > 0.5 else 0))
+                s.set_at((sx - 1, y), splash)
+                s.set_at((sx + 2, y), splash)
+                s.set_at((sx, y - 1), splash)
         for pf in self.smoke:
             age = pf[4] / pf[5]
             base = (70, 65, 65) if pf[6] else (200, 200, 200)

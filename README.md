@@ -30,6 +30,8 @@ A year passes every 12 days in the city, about half an hour. Trees blossom in sp
 
 Every so often the town holds a festival, and each era celebrates in its own way: a bonfire in the Stone Age, a harvest festival with haystacks, a medieval fair with striped tents, a brass band on a bandstand, street parades of floats, and in the Green Future a drone light show that draws shapes in the night sky. From the Industrial Age, some festivals become carnivals, with a Ferris wheel in the park. Bunting goes up, crowds come out, lanterns glow at night and, from medieval times on, the night ends with fireworks.
 
+Wildlife changes with the eras too: wolf packs, bears and rabbits roam the wilderness, cows, sheep and goats graze by the river, shepherds walk their flocks through the village, and pigeons peck along city pavements. Ducks paddle by with their ducklings, fish jump, bats come out at night, and fireflies glow among the trees on summer nights.
+
 Now and then the city goes through hard times, and recovers. A fire can burn a building or two (from the Industrial Age a fire engine races in), leaving ruins that are soon rebuilt. The river can flood over its banks and stop the trains. In medieval and industrial times a plague can empty the streets for a while, and when it lifts, the town throws a festival.
 
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
