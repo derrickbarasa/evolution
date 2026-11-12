@@ -4,6 +4,8 @@ A pixel-art screen saver where civilisation evolves while you're away.
 
 Leave your computer alone and an empty patch of wilderness slowly grows into huts, farms, castles, factories, skyscrapers and, finally, a green future city full of electric cars, drones, solar towers and maglev trains. Move the mouse or press a key to come back. Next time you step away, the city picks up where it left off. Once it has enjoyed the green future for a while, the screen fades out and a new city begins from wilderness.
 
+**[Download for Windows](https://derrickbarasa.online/evolution/download)** · [Website](https://derrickbarasa.online/evolution/)
+
 ![A metropolis at night](docs/hero.png)
 
 ## The eras
