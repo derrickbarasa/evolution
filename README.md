@@ -28,7 +28,7 @@ With more than one monitor, the city stretches across all of them as one wide pa
 
 A year passes every 12 days in the city, about half an hour. Trees blossom in spring and turn orange in autumn, with leaves drifting down. In winter it snows. The weather changes every minute or two, between clear skies, clouds, rain and summer thunderstorms, and grey skies dim the town.
 
-Every so often the town holds a festival: bunting goes up over the street, crowds come out, lanterns glow at night and, from medieval times on, the night ends with fireworks.
+Every so often the town holds a festival, and each era celebrates in its own way: a bonfire in the Stone Age, a harvest festival with haystacks, a medieval fair with striped tents, a brass band on a bandstand, street parades of floats, and in the Green Future a drone light show that draws shapes in the night sky. From the Industrial Age, some festivals become carnivals, with a Ferris wheel in the park. Bunting goes up, crowds come out, lanterns glow at night and, from medieval times on, the night ends with fireworks.
 
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
 

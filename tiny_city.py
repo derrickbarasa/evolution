@@ -57,10 +57,10 @@ TRAFFIC_RATE = [0, 0, 0.12, 0.2, 0.35, 0.6, 1.0, 0.9]
 WALK_RATE = [0, 0.08, 0.15, 0.2, 0.25, 0.35, 0.45, 0.45]
 SPEED = {"oxcart": 10, "horsecart": 14, "carriage": 16, "bicycle": 12, "vintage": 22,
          "oldbus": 20, "car": 30, "truck": 26, "bus": 25, "ev": 32, "ebus": 26,
-         "scooter": 13, "deer": 9, "walker": 8}
+         "scooter": 13, "deer": 9, "walker": 8, "float": 7}
 LENGTH = {"oxcart": 15, "horsecart": 15, "carriage": 15, "bicycle": 5, "vintage": 10,
           "oldbus": 18, "car": 11, "truck": 17, "bus": 20, "ev": 12, "ebus": 22,
-          "scooter": 4, "deer": 5, "walker": 2}
+          "scooter": 4, "deer": 5, "walker": 2, "float": 24}
 CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
               (40, 40, 45), (60, 150, 90), (230, 120, 40), (150, 155, 165)]
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
@@ -79,6 +79,9 @@ PRECIP = {"clear": 0.0, "cloudy": 0.0, "rain": 0.6, "storm": 1.0, "snow": 0.7}
 AUTUMN_COLORS = [(215, 120, 40), (190, 65, 40), (225, 180, 60)]
 FIREWORK_COLORS = [(255, 90, 90), (255, 220, 90), (120, 200, 255), (150, 255, 150), (240, 130, 255), (255, 255, 255)]
 BUNTING_COLORS = [(220, 60, 60), (240, 200, 60), (60, 120, 210), (70, 170, 90), (230, 230, 230)]
+FESTIVALS = {1: "bonfire", 2: "harvest", 3: "fair", 4: "band", 5: "parade", 6: "parade", 7: "drones"}
+PARADES = ("parade", "carnival", "drones")     # festivals that close the road for floats
+DRONE_COLORS = [(120, 200, 255), (255, 110, 150), (255, 220, 90)]
 BALLOON_COLORS = [(220, 60, 60), (240, 190, 40), (60, 120, 200), (80, 170, 90), (230, 120, 40)]
 SNOW_COLOR = (232, 237, 243)
 
@@ -606,6 +609,33 @@ def draw_mover(s, m, t):
         P(3, 0, 2, 2, dark)
         P(16, 0, 2, 2, dark)
         P(21, 2, 1, 1, mix(dark, (180, 255, 255), 0.5 + 0.5 * NIGHT))
+    elif k == "float":      # carnival parade float: a decorated platform with dancers
+        def C(dx, dy, r, col):
+            pygame.draw.circle(s, col, (int(x + dx if d > 0 else x - dx), int(b - dy)), r)
+        seed = int(m["seed"])
+        P(2, 0, 2, 1, dark)
+        P(20, 0, 2, 1, dark)
+        P(0, 1, 24, 4, c)
+        for i in range(0, 24, 2):
+            P(i, 1, 1, 1, sh((240, 240, 240)))
+        for i in range(1, 24, 3):
+            P(i, 4, 1, 1, mix(c, (255, 230, 140), 0.3 + 0.7 * NIGHT))
+        if seed % 3 == 0:       # balloon bunch
+            for dx, dy, r, j in ((7, 10, 3, 0), (12, 12, 4, 1), (17, 10, 3, 2)):
+                C(dx, dy, r, sh(BUNTING_COLORS[(seed + j) % 5]))
+        elif seed % 3 == 1:     # giant flower
+            P(12, 5, 1, 6, sh((60, 150, 70)))
+            C(12, 14, 4, sh((240, 120, 170)))
+            P(11, 13, 3, 3, sh((250, 220, 80)))
+        else:                   # crown
+            P(6, 5, 13, 5, sh((235, 190, 50)))
+            for dx in (6, 12, 18):
+                P(dx, 10, 1, 2, sh((235, 190, 50)))
+            P(11, 7, 3, 2, sh((200, 50, 60)))
+        for i, dx in enumerate((2, 21)):
+            bob = int(t * 6 + i + m["seed"]) % 2
+            P(dx, 5 + bob, 1, 2, sh(BUNTING_COLORS[(seed + i + 3) % 5]))
+            P(dx, 7 + bob, 1, 1, sh((230, 190, 150)))
 
 
 def draw_train(s, tr, t):
@@ -745,6 +775,22 @@ def draw_flyer(s, f, t):
             s.set_at((x, y - 4), (255, 190, 80))
 
 
+def drone_shape(k, i, n):
+    """Point i of n on a circle (k=0), heart (1) or star (2), roughly within -1..1."""
+    a = math.tau * i / n
+    if k == 0:
+        return math.cos(a), math.sin(a)
+    if k == 1:
+        return (16 * math.sin(a) ** 3 / 16,
+                -(13 * math.cos(a) - 5 * math.cos(2 * a) - 2 * math.cos(3 * a) - math.cos(4 * a)) / 16)
+    s = i / n * 10
+    j, f = int(s), s - int(s)
+    corner = [(math.cos(-math.pi / 2 + c * math.pi / 5) * (1 if c % 2 == 0 else 0.42),
+               math.sin(-math.pi / 2 + c * math.pi / 5) * (1 if c % 2 == 0 else 0.42)) for c in (j, j + 1)]
+    return (corner[0][0] + (corner[1][0] - corner[0][0]) * f,
+            corner[0][1] + (corner[1][1] - corner[0][1]) * f)
+
+
 # ----------------------------------------------------------------- the world
 class World:
     def __init__(self, era_seconds, seed=None):
@@ -782,6 +828,7 @@ class World:
     def init_events(self):
         self.show = 0.0                     # seconds of fireworks left
         self.festival, self.festival_timer = 0.0, 300.0
+        self.festival_kind, self.fair_x = "", LW // 2
         self.rockets, self.sparks = [], []  # rocket: [x, y, vy, colour]; spark: [x, y, vx, vy, age, life, colour]
 
     def __setstate__(self, state):      # cities saved before there was weather or events
@@ -866,7 +913,8 @@ class World:
             self.movers.append(dict(kind="walker", x=x, base=WALK_Y, dir=d, v=v, color=rng.choice(shirts),
                                     skin=rng.choice([(240, 200, 160), (200, 150, 110), (150, 100, 70), (100, 70, 50)]),
                                     seed=rng.random() * 10, dog=era >= 5 and rng.random() < 0.15))
-        if TRAFFIC[era] and rng.random() < dt * TRAFFIC_RATE[era]:
+        road_closed = self.festival > 0 and self.festival_kind in PARADES
+        if TRAFFIC[era] and not road_closed and rng.random() < dt * TRAFFIC_RATE[era]:
             kind = rng.choice(TRAFFIC[era])
             d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind])
             col = rng.choice(EV_COLORS if era >= 7 else OLD_COLORS if era <= 5 else CAR_COLORS)
@@ -977,6 +1025,16 @@ class World:
         self.update_events(dt, era)
         self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
 
+    def start_festival(self, era):
+        """Each era celebrates its own way; from the Industrial Age some festivals are carnivals."""
+        rng = self.rng
+        self.festival_kind, self.festival = FESTIVALS[era], 50.0
+        self.fair_x = int(rng.uniform(0.3, 0.7) * LW)
+        parks = [p for p in self.plots if p.kind == "nature" and p.w >= 24]
+        if era >= 4 and parks and rng.random() < 0.35:
+            p = rng.choice(parks)
+            self.festival_kind, self.festival, self.fair_x = "carnival", 70.0, p.x + p.w // 2
+
     def update_events(self, dt, era):
         rng = self.rng
         # ---- a town festival every so often, if the weather is fine
@@ -984,9 +1042,18 @@ class World:
         if self.festival > 0:
             self.festival = max(0.0, self.festival - dt)
         elif self.festival_timer <= 0:
-            if era >= 2 and self.weather in ("clear", "cloudy"):
-                self.festival = 50.0
+            if era >= 1 and self.weather in ("clear", "cloudy"):
+                self.start_festival(era)
             self.festival_timer = rng.uniform(400, 800)
+        if self.festival > 0:
+            kind = self.festival_kind
+            if kind == "bonfire" and rng.random() < dt * 3:
+                self.puff(self.fair_x, GROUND - 6, 0.8)
+            if kind in PARADES and self.festival > 8 and rng.random() < dt * 0.3:
+                if all(m["x"] > 4 for m in self.movers if m["base"] == LANE_R):
+                    self.movers.append(dict(kind="float", x=-LENGTH["float"] - 2, base=LANE_R, dir=1,
+                                            v=SPEED["float"], color=rng.choice(BUNTING_COLORS),
+                                            seed=rng.random() * 10))
 
         # ---- fireworks: a show for each new era, and festival nights from medieval times on
         launch = 0.0
@@ -1069,6 +1136,96 @@ class World:
                 self.bolt.append((x, y))
 
     # ------------------------------------------------------------- drawing
+    def draw_festival(self, s, era, t):
+        kind, fx = self.festival_kind, self.fair_x
+        if kind != "bonfire":       # bunting over the street, with lanterns at night
+            pole = sh((120, 90, 60) if era < 4 else (90, 90, 95))
+            string = sh((70, 60, 50))
+            for px in range(20, LW, 40):
+                s.fill(pole, (px, ROAD_TOP - 15, 1, 15))
+                for i in range(1, 40):
+                    xx = px + i
+                    yy = ROAD_TOP - 14 + int(math.sin(math.pi * i / 40) * 4)
+                    s.set_at((xx, yy), string)
+                    if i % 4 == 2:
+                        c = sh(BUNTING_COLORS[(xx // 4) % len(BUNTING_COLORS)])
+                        s.fill(c, (xx - 1, yy + 1, 3, 1))
+                        s.set_at((xx, yy + 2), c)
+                    elif i % 8 == 0 and NIGHT > 0.3:
+                        s.fill(mix(sh((200, 120, 60)), (255, 200, 110), NIGHT), (xx, yy + 1, 1, 2))
+
+        if kind == "bonfire":
+            if NIGHT > 0.2:
+                pygame.draw.ellipse(s, mix(s.get_at((fx, ROAD_TOP - 2))[:3], (230, 110, 50), 0.25 * NIGHT),
+                                    (fx - 9, GROUND, 19, 5))
+            s.fill(sh((90, 60, 40)), (fx - 4, ROAD_TOP - 2, 9, 2))
+            for i in range(5):
+                h = 4 + int(abs(math.sin(t * 9 + i * 1.7)) * 6) - abs(i - 2) * 2
+                s.fill(mix((255, 90, 30), (255, 220, 90), (i % 2) * 0.7), (fx - 2 + i, ROAD_TOP - 2 - h, 1, h))
+
+        elif kind == "harvest":
+            for hx in range(30, LW, 60):
+                pygame.draw.ellipse(s, sh((215, 185, 90)), (hx - 5, ROAD_TOP - 7, 11, 7))
+                s.fill(sh((185, 155, 70)), (hx - 4, ROAD_TOP - 4, 9, 1))
+                s.fill(sh((230, 130, 40)), (hx + 7, ROAD_TOP - 3, 3, 2))
+                s.set_at((hx + 8, ROAD_TOP - 4), sh((60, 120, 50)))
+
+        if kind in ("fair", "carnival"):
+            spots = range(40, LW, 80) if kind == "fair" else (fx - 32, fx + 32)
+            for i, tx in enumerate(spots):
+                c, white = sh(BUNTING_COLORS[i % 3]), sh((240, 240, 235))
+                for j in range(13):
+                    s.fill(c if (j // 2) % 2 == 0 else white, (tx - 6 + j, ROAD_TOP - 7, 1, 6))
+                pygame.draw.polygon(s, c, [(tx - 7, ROAD_TOP - 7), (tx, ROAD_TOP - 13), (tx + 7, ROAD_TOP - 7)])
+                s.fill(c, (tx, ROAD_TOP - 16, 2, 1))
+                s.fill(mix(sh((50, 35, 30)), (255, 210, 130), NIGHT), (tx - 1, ROAD_TOP - 4, 3, 3))
+
+        if kind == "band":      # brass band on a bandstand, notes drifting up
+            s.fill(sh((150, 120, 90)), (fx - 10, ROAD_TOP - 4, 21, 3))
+            for px in (fx - 9, fx + 9):
+                s.fill(sh((230, 225, 215)), (px, ROAD_TOP - 13, 1, 9))
+            pygame.draw.polygon(s, sh((180, 50, 40)), [(fx - 12, ROAD_TOP - 12), (fx, ROAD_TOP - 18), (fx + 12, ROAD_TOP - 12)])
+            for i in range(4):
+                mx = fx - 6 + i * 4
+                bob = int(t * 4 + i) % 2
+                s.fill(sh((40, 50, 120)), (mx, ROAD_TOP - 7 - bob, 1, 3))
+                s.set_at((mx, ROAD_TOP - 8 - bob), sh((230, 190, 150)))
+                s.set_at((mx + 1, ROAD_TOP - 6 - bob), sh((235, 195, 60)))
+            for i in range(3):
+                ph = (t * 0.5 + i / 3) % 1
+                nx = fx - 6 + i * 6 + int(math.sin(t * 2 + i) * 2)
+                ny = ROAD_TOP - 20 - int(ph * 24)
+                col = mix(sh((45, 40, 60)), s.get_at((nx, ny))[:3], ph)
+                s.fill(col, (nx, ny, 1, 3))
+                s.set_at((nx - 1, ny + 2), col)
+
+        if kind == "carnival":  # Ferris wheel in the park
+            cx, cy, r = fx, GROUND - 24, 18
+            frame = sh((205, 205, 215))
+            pygame.draw.line(s, frame, (cx, cy), (cx - 10, GROUND))
+            pygame.draw.line(s, frame, (cx, cy), (cx + 10, GROUND))
+            pygame.draw.circle(s, frame, (cx, cy), r, 1)
+            for i in range(16):
+                a = t * 0.4 + i * math.tau / 16
+                ex, ey = cx + math.cos(a) * r, cy + math.sin(a) * r
+                if i % 2 == 0:
+                    pygame.draw.line(s, frame, (cx, cy), (ex, ey))
+                    s.fill(sh(BUNTING_COLORS[i // 2 % 5]), (int(ex) - 1, int(ey) + 1, 3, 2))
+                elif NIGHT > 0.3 and (int(t * 3) + i) % 4:
+                    s.set_at((int(ex), int(ey)), mix(frame, (255, 225, 130), NIGHT))
+            s.fill(sh((120, 120, 130)), (cx - 1, cy - 1, 3, 3))
+
+        if kind == "drones" and NIGHT > 0.5:     # drone light show: circle, heart, star
+            n, ox, oy, size = 48, LW // 2, 70, 28
+            phase = t / 6
+            k, f = int(phase) % 3, smooth(0.65, 1.0, phase % 1)
+            col = mix(DRONE_COLORS[k], DRONE_COLORS[(k + 1) % 3], f)
+            col = mix(s.get_at((ox, oy))[:3], col, smooth(0.5, 0.8, NIGHT))
+            for i in range(n):
+                x0, y0 = drone_shape(k, i, n)
+                x1, y1 = drone_shape((k + 1) % 3, i, n)
+                s.set_at((int(ox + (x0 + (x1 - x0) * f) * size), int(oy + (y0 + (y1 - y0) * f) * size)), col)
+
     def draw(self, s, phase=None):
         global NIGHT, SNOW, AUTUMN, BLOSSOM
         t = self.t
@@ -1224,22 +1381,8 @@ class World:
                 s.fill(pole, (lx, ROAD_TOP - 11, 3, 1))
                 s.fill(mix(sh((200, 200, 190)), (255, 230, 150), NIGHT), (lx + 2, ROAD_TOP - 10, 1, 1))
 
-        # festival bunting over the street, with lanterns at night
         if self.festival > 0:
-            pole = sh((120, 90, 60) if era < 4 else (90, 90, 95))
-            string = sh((70, 60, 50))
-            for px in range(20, LW, 40):
-                s.fill(pole, (px, ROAD_TOP - 15, 1, 15))
-                for i in range(1, 40):
-                    xx = px + i
-                    yy = ROAD_TOP - 14 + int(math.sin(math.pi * i / 40) * 4)
-                    s.set_at((xx, yy), string)
-                    if i % 4 == 2:
-                        c = sh(BUNTING_COLORS[(xx // 4) % len(BUNTING_COLORS)])
-                        s.fill(c, (xx - 1, yy + 1, 3, 1))
-                        s.set_at((xx, yy + 2), c)
-                    elif i % 8 == 0 and NIGHT > 0.3:
-                        s.fill(mix(sh((200, 120, 60)), (255, 200, 110), NIGHT), (xx, yy + 1, 1, 2))
+            self.draw_festival(s, era, t)
 
         for m in self.movers:
             draw_mover(s, m, t)
