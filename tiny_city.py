@@ -68,7 +68,15 @@ CAR_COLORS = [(200, 50, 50), (50, 90, 190), (235, 235, 235), (240, 190, 40),
 OLD_COLORS = [(30, 30, 35), (40, 60, 45), (90, 30, 30), (40, 45, 70)]
 EV_COLORS = [(240, 245, 250), (90, 200, 220), (120, 220, 150), (200, 205, 215), (250, 120, 160)]
 
-GREEN_ERAS = 2      # Green Future lasts this many eras before a new city begins
+GREEN_ERAS = 2      # Green Future lasts this many eras before the city falls
+FALL_AT = len(ERAS) - 1 + GREEN_ERAS
+WAR_ERAS = 0.6      # the fall: a war, or people slowly moving away
+WILD_ERAS = 1.2     # then nature takes the land back and a new city begins
+ENDINGS = {"war": "War, then nature returns", "peace": "People move away, nature returns",
+           "keep": "Keep the city"}
+JET_COLOR = (70, 75, 85)
+BLAST_COLORS = [(255, 170, 60), (255, 220, 110), (230, 90, 40), (120, 110, 105)]
+REMNANTS = {}       # city width -> bits of pavement, road and railway left as grass returns
 SEASON_LEN = DAY_LEN * 3    # a year is 12 days
 WEATHER = [         # chance of each kind of weather in spring, summer, autumn, winter
     {"clear": 0.45, "cloudy": 0.2, "rain": 0.3, "storm": 0.05},
@@ -233,7 +241,8 @@ def round_tree(s, x, base, r, col=(60, 140, 70)):
     s.set_at((x - r // 2, base - 4 - r - r // 2), sh(mix(col, (255, 255, 200), 0.3)))
 
 
-def draw_nature(s, p, era, t):
+def draw_nature(s, p, era, t, grow=1.0):
+    """Trees on an empty plot: a tidy park from the Modern City on, else wild woods (grow < 1 for young trees)."""
     R = random.Random(p.tree_seed)
     if era >= 5:   # tidy city park
         n = max(1, p.w // 11)
@@ -252,9 +261,13 @@ def draw_nature(s, p, era, t):
         for _ in range(max(1, p.w // 7)):
             tx = p.x + 3 + R.randint(0, max(0, p.w - 6))
             if R.random() < 0.55:
-                pine(s, tx, GROUND, R.randint(10, 19))
+                h = int(R.randint(10, 19) * grow)
+                if h >= 3:
+                    pine(s, tx, GROUND, h)
             else:
-                round_tree(s, tx, GROUND, R.randint(3, 6), (70, 135, 60))
+                r = R.randint(3, 6)
+                if grow >= 0.3:
+                    round_tree(s, tx, GROUND, max(1, round(r * grow)), (70, 135, 60))
 
 
 def draw_building(s, p, t):
@@ -470,16 +483,71 @@ def draw_building(s, p, t):
         s.set_at((px, g - 4), (190, 255, 130) if int(t * 2) % 2 else (40, 120, 70))
 
 
-def draw_ruins(s, p, t):
-    """What's left after a fire: charred rubble and a broken wall."""
+def draw_ruins(s, p, t, moss=0.0, sink=0.0):
+    """What's left after a fire: charred rubble and broken walls. As nature returns,
+    moss creeps over it (moss 0..1) and it sinks into the ground (sink 0..1)."""
     R = random.Random(p.seed)
-    char, ash = sh((60, 52, 48)), sh((100, 92, 86))
+    char, ash, green = sh((60, 52, 48)), sh((100, 92, 86)), sh(leaf((75, 130, 60), p.x))
+    keep = 1 - sink
     for xx in range(p.x + 1, p.x + p.w - 1):
-        hgt = 2 + R.randint(0, 5)
-        s.fill(char if R.random() < 0.6 else ash, (xx, GROUND - hgt, 1, hgt))
+        hgt = round((2 + R.randint(0, 5)) * keep)
+        c = char if R.random() < 0.6 else ash
+        if R.random() < moss:
+            c = green
+        if hgt:
+            s.fill(c, (xx, GROUND - hgt, 1, hgt))
     wx = p.x + 2 + R.randrange(max(1, p.w - 6))
-    s.fill(char, (wx, GROUND - 13, 2, 13))
-    s.fill(char, (wx + 2, GROUND - 9, 2, 9))
+    sw = 2 if p.h < 60 else max(2, p.w // 4)        # tall buildings leave hollow, broken shells
+    for dx, wh in ((0, max(13, int(p.h * 0.4))), (sw, max(9, int(p.h * 0.22)))):
+        x0 = min(wx + dx, p.x + p.w - sw)
+        for xx in range(x0, x0 + sw):
+            hh = round((wh - R.randint(0, max(1, wh // 6))) * keep)       # jagged top
+            s.fill(char, (xx, GROUND - hh, 1, hh))
+            if sw > 2 and xx % 3 == 1:                  # empty window holes
+                for yy in range(GROUND - hh + 3, GROUND - 3, 5):
+                    s.set_at((xx, yy), ash)
+        vine = int(wh * keep * moss * 0.9)
+        s.fill(green, (x0 + sw // 2, GROUND - vine, 1, vine))
+
+
+def draw_overgrown(s, p, t, wild):
+    """A plot as nature takes the land back (wild 0..1): parks run wild, ruins sink under moss and young trees."""
+    th = 0.3 + 0.3 * (p.tree_seed % 1000) / 1000      # each plot goes back to the woods at its own pace
+    if p.kind == "nature":
+        if wild < th:
+            draw_nature(s, p, 7, t)
+    elif wild < th + 0.35:
+        draw_ruins(s, p, t, moss=smooth(0, th, wild), sink=smooth(th, th + 0.35, wild))
+    draw_nature(s, p, 0, t, grow=smooth(th - 0.25, th + 0.4, wild))
+
+
+def remnants(lw):
+    """Pieces of pavement, road, railway and lamp posts that grass slowly covers: (rect, colour, gone at wild)."""
+    out = REMNANTS.get(lw)
+    if out is None:
+        R = random.Random(11)
+        out = []
+
+        def add(rect, col, lo, hi):
+            out.append((rect, col, R.uniform(lo, hi)))
+        for x in range(0, lw, 7):
+            add((x, GROUND, 6, ROAD_TOP - GROUND), (175, 175, 172), 0.1, 0.65)
+        for y in range(ROAD_TOP, ROAD_BOT, 4):      # cracked asphalt, with grass in the cracks
+            x = -R.randrange(8)
+            while x < lw:
+                w = R.randint(5, 11)
+                add((x, y, w - 1, 3), (55, 56, 62), 0.3, 0.9)
+                x += w
+        for x in range(0, lw, 10):
+            add((x, ROAD_TOP + 8, 5, 1), (235, 235, 235), 0.05, 0.35)
+        for x in range(0, lw, 4):
+            add((x, RAIL_Y, 2, 2), (110, 80, 55), 0.05, 0.7)
+        for x in range(0, lw, 9):
+            add((x, RAIL_Y, R.randint(4, 9), 1), (190, 200, 210), 0.1, 0.5)
+        for x in range(8, lw, 30):
+            add((x, ROAD_TOP - 11, 1, 11), (60, 60, 65), 0.1, 0.5)
+        REMNANTS[lw] = out
+    return out
 
 
 def draw_flames(s, p, t, i):
@@ -875,6 +943,13 @@ def draw_flyer(s, f, t):
         P(4, -1, 2, 1, sh((200, 205, 215)))
         if int(t * 2 + f["seed"]) % 2:
             P(4, 0, 1, 1, (255, 50, 50))
+    elif k == "jet":
+        col = sh(JET_COLOR)
+        P(0, 0, 10, 1, col)
+        P(0, 1, 1, 2, col)
+        P(3, -1, 3, 1, col)
+        P(4, 1, 2, 1, col)
+        P(-2, 0, 2, 1, (255, 150, 60) if int(t * 20 + f["seed"]) % 2 else (255, 220, 120))
     elif k == "drone":
         P(0, 0, 3, 1, sh((50, 55, 60)))
         P(-1, 1, 1, 1, sh((120, 120, 130)))
@@ -929,6 +1004,10 @@ def drone_shape(k, i, n):
 
 # ----------------------------------------------------------------- the world
 class World:
+    born = 0.0          # when this city's story began; the clock (days, seasons) keeps running across cities
+    cycle = 1           # how many cities have stood here
+    ending = "keep"     # how a city ends after Green Future: "war", "peace" or "keep" it
+
     def __init__(self, era_seconds, seed=None):
         self.rng = random.Random(seed)
         self.era_seconds = era_seconds
@@ -972,6 +1051,7 @@ class World:
         self.hardship, self.hard_t, self.hard_timer = None, 0.0, 900.0   # fire, flood or plague
         self.burning, self.spread, self.mud = [], False, 0.0
         self.rockets, self.sparks = [], []  # rocket: [x, y, vy, colour]; spark: [x, y, vx, vy, age, life, colour]
+        self.war_fires, self.booms, self.blast = {}, [], 0.0    # plot -> seconds burning; [x, age] far away
 
     def __setstate__(self, state):      # cities saved before there was weather or events
         self.init_weather()
@@ -999,8 +1079,48 @@ class World:
         return pts[-1][1]
 
     @property
+    def age(self):
+        """Eras since this city began, running on past the last one."""
+        return (self.t - self.born) / self.era_seconds
+
+    @property
     def era_f(self):
-        return min(self.t / self.era_seconds, len(ERAS) - 0.001)
+        return min(self.age, len(ERAS) - 0.001)
+
+    @property
+    def fallen(self):
+        """True once Green Future is over and the city's end has begun."""
+        return self.ending != "keep" and self.age >= FALL_AT
+
+    @property
+    def fall(self):
+        """0..1 through the war (or the people moving away)."""
+        return clamp((self.age - FALL_AT) / WAR_ERAS) if self.fallen else 0.0
+
+    @property
+    def wild(self):
+        """0..1 through nature taking the land back after the fall."""
+        return clamp((self.age - FALL_AT - WAR_ERAS) / WILD_ERAS) if self.fallen else 0.0
+
+    def haze(self):
+        """Smoke and fire glow over a city at war, clearing once it's over."""
+        if self.ending != "war" or not self.fallen:
+            return 0.0
+        return smooth(0.0, 0.15, self.fall) * (1 - smooth(0.0, 0.3, self.wild))
+
+    def set_ending(self, ending):
+        """Choose how this city ends. A city kept past Green Future starts its ending from now."""
+        if ending != "keep" and self.ending == "keep" and self.age > FALL_AT:
+            self.born = self.t - FALL_AT * self.era_seconds
+        self.ending = ending
+
+    def stage(self):
+        """What to call this point in the city's story."""
+        if not self.fallen:
+            return ERAS[int(self.era_f)]
+        if self.wild > 0:
+            return "Reclamation"
+        return "The Last War" if self.ending == "war" else "Abandonment"
 
     def year(self):
         ef = self.era_f
@@ -1017,14 +1137,18 @@ class World:
             self.smoke.append([x + r.uniform(-1, 1), y, r.uniform(2, 6), r.uniform(-9, -5) * size,
                                0.0, r.uniform(2.5, 4.5) * size, dark])
 
-    def spawn_side(self, length, speed):
-        d = 1 if self.rng.random() < 0.5 else -1
+    def spawn_side(self, length, speed, d=None):
+        if d is None:
+            d = 1 if self.rng.random() < 0.5 else -1
         x = -length - 2 if d > 0 else LW + length + 2
         return d, x, speed * self.rng.uniform(0.8, 1.2)
 
     def update(self, dt):
         self.t += dt
         t, rng = self.t, self.rng
+        if self.fallen:
+            self.update_fall(dt)
+        fallen = self.fallen
         era = int(self.era_f)
         if era != self.last_era:
             self.last_era = era
@@ -1034,19 +1158,22 @@ class World:
 
         # ---- the city grows
         rate = 6.0 / self.era_seconds
+        smoulder = 1 - smooth(0.0, 0.25, self.wild)
         for i, p in enumerate(self.plots):
             if p.building:
                 p.progress += dt / p.build_time
                 if p.progress >= 1.0:
                     p.progress, p.building = 1.0, False
-            elif i in self.burning:
+            elif i in self.burning or i in self.war_fires:
                 continue
+            elif fallen:
+                pass        # nobody builds any more
             elif (p.ruined or (p.kind == "nature" and p.rank < DENSITY[era])
                   or (p.kind != "nature" and p.level < era)):
                 if rng.random() < dt * rate * (4 if p.ruined else 1):     # ruins are rebuilt first
                     p.start(era, rng, clamp(self.era_seconds * rng.uniform(0.05, 0.1), 2.0, 14.0))
             if p.ruined:
-                if rng.random() < dt * 0.6:     # still smouldering
+                if rng.random() < dt * 0.6 * smoulder:     # still smouldering
                     self.puff(p.x + p.w // 2, GROUND - 6, 0.7)
             elif not p.building:
                 if p.kind == "factory" and rng.random() < dt * 5:
@@ -1056,17 +1183,25 @@ class World:
 
         # ---- traffic, walkers and wildlife
         crowd = 4 if self.festival > 0 else 0.15 if self.hardship == "plague" else 1
+        away = None         # once the city falls, everyone heads out of town the same way
+        if fallen:
+            away = -1
+            if self.ending == "war":     # a rush to flee as the war begins
+                crowd = 6 * (1 - smooth(0.04, 0.2, self.fall))
+            else:                       # people slowly move away
+                crowd = 1.5 * (1 - smooth(0.3, 0.9, self.fall))
         if rng.random() < dt * WALK_RATE[era] * crowd:
-            d, x, v = self.spawn_side(2, SPEED["walker"])
+            d, x, v = self.spawn_side(2, SPEED["walker"] * (1.8 if crowd > 2 and fallen else 1), away)
             shirts = [(130, 90, 60), (110, 80, 50)] if era <= 2 else \
                      [(200, 60, 60), (60, 90, 200), (240, 200, 60), (80, 160, 90), (230, 230, 230), (160, 80, 180)]
             self.movers.append(dict(kind="walker", x=x, base=WALK_Y, dir=d, v=v, color=rng.choice(shirts),
                                     skin=rng.choice([(240, 200, 160), (200, 150, 110), (150, 100, 70), (100, 70, 50)]),
                                     seed=rng.random() * 10, dog=era >= 5 and rng.random() < 0.15))
         road_closed = self.festival > 0 and self.festival_kind in PARADES
-        if TRAFFIC[era] and not road_closed and rng.random() < dt * TRAFFIC_RATE[era]:
+        traffic = min(crowd, 2) if fallen else 1
+        if TRAFFIC[era] and not road_closed and rng.random() < dt * TRAFFIC_RATE[era] * traffic:
             kind = rng.choice(TRAFFIC[era])
-            d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind])
+            d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind], away)
             col = rng.choice(EV_COLORS if era >= 7 else OLD_COLORS if era <= 5 else CAR_COLORS)
             if kind == "bus":
                 col = rng.choice([(240, 190, 40), (200, 50, 50), (60, 120, 200)])
@@ -1078,7 +1213,7 @@ class World:
             if entry_clear:
                 self.movers.append(dict(kind=kind, x=x, base=base, dir=d, v=v, color=col,
                                         skin=(230, 190, 150), skin2=rng.choice(CAR_COLORS), seed=rng.random() * 10))
-        if era <= 1 and rng.random() < dt * 0.04:
+        if (era <= 1 or self.wild > 0.25) and rng.random() < dt * 0.04:
             d, x, v = self.spawn_side(5, SPEED["deer"])
             self.movers.append(dict(kind="deer", x=x, base=LANE_R if d > 0 else LANE_L, dir=d, v=v,
                                     color=(0, 0, 0), seed=rng.random() * 10))
@@ -1101,7 +1236,7 @@ class World:
         self.movers = [m for m in self.movers if (m["x"] < LW + 40 if m["dir"] > 0 else m["x"] > -40)]
 
         # ---- trains
-        if era >= 4:
+        if era >= 4 and not fallen:
             self.train_timer -= dt
             if self.train_timer <= 0 and not self.trains and self.hardship != "flood":
                 kind = ["steam", "diesel", "commuter", "maglev"][era - 4]
@@ -1120,7 +1255,7 @@ class World:
         self.trains = [tr for tr in self.trains if (tr["x"] < LW + 2 if tr["dir"] > 0 else tr["x"] > -2)]
 
         # ---- boats
-        if era >= 1 and rng.random() < dt * 0.04 and len(self.boats) < 4:
+        if era >= 1 and not fallen and rng.random() < dt * 0.04 and len(self.boats) < 4:
             kind = {1: "canoe", 2: "canoe", 3: "sailboat", 4: "steamboat", 5: "motorboat",
                     6: "motorboat", 7: "eferry"}[era]
             if era in (5, 6) and rng.random() < 0.3:
@@ -1136,28 +1271,35 @@ class World:
 
         # ---- things in the sky
         options = []
-        if era <= 4 and NIGHT < 0.6:
-            options += [("bird", 0.12)]
-        if era == 5:
-            options += [("biplane", 0.02)]
-        if era == 6:
-            options += [("plane", 0.04)]
-        if era == 7:
-            options += [("drone", 0.15), ("flycar", 0.05), ("plane", 0.02)]
-        if era >= 4 and self.cloud < 0.4 and not any(f["kind"] == "balloon" for f in self.flyers):
-            options += [("balloon", 0.012)]
-        if era <= 3 and NIGHT > 0.6:
-            options += [("bat", 0.08)]
+        sky = era
+        if fallen:
+            sky = 0 if self.wild > 0.2 else None       # birds and bats come back with the woods
+            if self.ending == "war" and 0.08 < self.fall < 0.85:
+                options += [("jet", 0.25)]
+        if sky is not None:
+            if sky <= 4 and NIGHT < 0.6:
+                options += [("bird", 0.12)]
+            if sky == 5:
+                options += [("biplane", 0.02)]
+            if sky == 6:
+                options += [("plane", 0.04)]
+            if sky == 7:
+                options += [("drone", 0.15), ("flycar", 0.05), ("plane", 0.02)]
+            if sky >= 4 and self.cloud < 0.4 and not any(f["kind"] == "balloon" for f in self.flyers):
+                options += [("balloon", 0.012)]
+            if sky <= 3 and NIGHT > 0.6:
+                options += [("bat", 0.08)]
         for kind, r in options:
             if rng.random() < dt * r:
                 d, x, v = self.spawn_side(10, {"bird": 14, "biplane": 18, "plane": 30, "drone": 12, "flycar": 26,
-                                               "balloon": 4, "bat": 16}[kind])
+                                               "balloon": 4, "bat": 16, "jet": 75}[kind])
                 y = {"bird": rng.uniform(40, 110), "biplane": rng.uniform(40, 80), "plane": rng.uniform(15, 45),
                      "drone": rng.uniform(60, 150), "flycar": rng.uniform(55, 115),
-                     "balloon": rng.uniform(55, 110), "bat": rng.uniform(90, 160)}[kind]
-                n = rng.randint(3, 6) if kind == "bird" else rng.randint(1, 3) if kind == "bat" else 1
+                     "balloon": rng.uniform(55, 110), "bat": rng.uniform(90, 160), "jet": rng.uniform(20, 75)}[kind]
+                n = rng.randint(3, 6) if kind == "bird" else rng.randint(1, 3) if kind in ("bat", "jet") else 1
+                gap = 9 if kind == "jet" else 5      # jets fly in formation
                 for i in range(n):
-                    self.flyers.append(dict(kind=kind, x=x - i * 5 * d, y=y + (i % 2) * 3 + i, dir=d, v=v,
+                    self.flyers.append(dict(kind=kind, x=x - i * gap * d, y=y + (i % 2) * 3 + i, dir=d, v=v,
                                             seed=rng.random() * 10, color=rng.choice(EV_COLORS)))
         for f in self.flyers:
             f["x"] += f["v"] * f["dir"] * dt
@@ -1179,6 +1321,64 @@ class World:
         self.update_hardship(dt, era)
         self.pop_shown += (self.population() - self.pop_shown) * clamp(dt * 1.5)
 
+    def update_fall(self, dt):
+        """After Green Future the city falls - to a war, or as people slowly move away -
+        then nature takes the land back and a new city's story begins."""
+        rng, f, wild = self.rng, self.fall, self.wild
+        war = self.ending == "war"
+        if wild >= 1:
+            self.begin_again()
+            return
+        if war:
+            self.festival = 0.0
+        phase = WAR_ERAS * self.era_seconds
+        start, end = (0.1, 0.85) if war else (0.15, 0.95)
+        for i, p in enumerate(self.plots):
+            if p.kind == "nature" or p.building or p.ruined or i in self.war_fires or i in self.burning:
+                continue
+            if wild > 0:            # the war is over: whatever still stands is in ruins
+                p.ruined = True
+            elif f >= end or (f > start and rng.random() < dt * 3 / phase):
+                if war:             # a strike: a burst of fire and debris, then it burns
+                    self.war_fires[i] = rng.uniform(0.05, 0.1) * phase
+                    self.blast = 1.0
+                    cx, top = p.x + p.w / 2, GROUND - p.h * rng.uniform(0.4, 0.9)
+                    for _ in range(rng.randint(30, 45)):
+                        a, v = rng.uniform(math.pi, math.tau), rng.uniform(15, 45)
+                        if len(self.sparks) < 800:
+                            self.sparks.append([cx, top, math.cos(a) * v, math.sin(a) * v, 0.0,
+                                                rng.uniform(0.6, 1.4), rng.choice(BLAST_COLORS)])
+                    for _ in range(8):
+                        self.puff(cx + rng.uniform(-p.w / 2, p.w / 2), top, 1.8, dark=True)
+                else:               # empty for years, it crumbles in a cloud of dust
+                    p.ruined = True
+                    for _ in range(10):
+                        self.puff(p.x + rng.uniform(0, p.w), GROUND - rng.uniform(2, p.h), 1.2)
+        for i in list(self.war_fires):
+            self.war_fires[i] -= dt
+            p = self.plots[i]
+            if rng.random() < dt * 8:
+                self.puff(p.x + rng.uniform(1, p.w - 1), GROUND - p.h - 2, 1.6, dark=True)
+            if self.war_fires[i] <= 0 or wild > 0:
+                p.ruined = True
+                del self.war_fires[i]
+        self.blast = max(0.0, self.blast - dt * 2.5)
+        if war and 0.05 < f < 0.9 and rng.random() < dt * 1.5:      # far-off shelling on the hills
+            self.booms.append([rng.uniform(5, LW - 5), 0.0])
+        for b in self.booms:
+            b[1] += dt
+        self.booms = [b for b in self.booms if b[1] < 0.7]
+
+    def begin_again(self):
+        """Nature has the land back: a new city grows from wilderness, laid out differently this time."""
+        for p in self.plots:
+            p.kind, p.h, p.variant, p.level = "nature", 0, 0, 0
+            p.building, p.progress, p.ruined = False, 1.0, False
+            p.rank = self.rng.random()
+        self.born, self.cycle, self.last_era = self.t, self.cycle + 1, 0
+        self.war_fires, self.booms, self.blast = {}, [], 0.0
+        self.festival_timer, self.hard_timer = 300.0, 900.0
+
     def start_festival(self, era):
         """Each era celebrates its own way; from the Industrial Age some festivals are carnivals."""
         rng = self.rng
@@ -1192,7 +1392,7 @@ class World:
     def update_wildlife(self, dt, era):
         rng = self.rng
         # ---- wild animals on the paths, sheep being walked through town, pigeons on the pavement
-        if era <= 1:
+        if era <= 1 or self.wild > 0.4:
             for kind, r in (("wolf", 0.015), ("bear", 0.006), ("rabbit", 0.05)):
                 if rng.random() < dt * r:
                     d, x, v = self.spawn_side(LENGTH[kind], SPEED[kind])
@@ -1208,7 +1408,7 @@ class World:
                                         color=(0, 0, 0), seed=rng.random() * 10))
             self.movers.append(dict(kind="walker", x=x - (n * 8 + 4) * d, base=WALK_Y, dir=d, v=v,
                                     color=(110, 80, 50), skin=(200, 150, 110), seed=rng.random() * 10, dog=True))
-        if era >= 4 and rng.random() < dt * 0.05:
+        if era >= 4 and not self.fallen and rng.random() < dt * 0.05:
             d, x, v = self.spawn_side(LENGTH["pigeon"], SPEED["pigeon"])
             for i in range(rng.randint(1, 3)):
                 self.movers.append(dict(kind="pigeon", x=x - i * 4 * d, base=WALK_Y, dir=d, v=v * rng.uniform(0.7, 1.3),
@@ -1266,7 +1466,7 @@ class World:
         self.mud = max(0.0, self.mud - dt / 40)
         if self.hardship is None:
             self.hard_timer -= dt
-            if self.hard_timer <= 0 and self.festival <= 0:
+            if self.hard_timer <= 0 and self.festival <= 0 and not self.fallen:
                 self.hard_timer = rng.uniform(900, 1500)
                 kinds = []
                 if 1 <= era <= 6 and any(p.kind != "nature" and not p.building and not p.ruined
@@ -1318,7 +1518,7 @@ class World:
         if self.festival > 0:
             self.festival = max(0.0, self.festival - dt)
         elif self.festival_timer <= 0:
-            if era >= 1 and self.weather in ("clear", "cloudy") and self.hardship is None:
+            if era >= 1 and self.weather in ("clear", "cloudy") and self.hardship is None and not self.fallen:
                 self.start_festival(era)
             self.festival_timer = rng.uniform(400, 800)
         if self.festival > 0:
@@ -1511,7 +1711,8 @@ class World:
             phase = (t / DAY_LEN + 0.28) % 1.0
         sun = math.sin(phase * math.tau)
         day = smooth(-0.12, 0.22, sun)
-        NIGHT = max(1.0 - day, self.cloud * 0.35)     # storms dim the town and some lights come on
+        haze, wild = self.haze(), self.wild
+        NIGHT = max(1.0 - day, self.cloud * 0.35, haze * 0.3)     # storms (and smoke) dim the town
         SHADED.clear()
         sf = self.season_f
         SNOW = self.snow
@@ -1531,11 +1732,13 @@ class World:
         grey = mix((135, 140, 150), (25, 27, 36), 1.0 - day)
         top = mix(top, grey, self.cloud * 0.8)
         bot = mix(bot, mix(grey, (255, 255, 255), 0.15), self.cloud * 0.7)
+        top = mix(top, mix((25, 20, 22), (85, 72, 68), day), haze * 0.75)        # smoke, and fires glowing low
+        bot = mix(bot, mix((120, 50, 30), (170, 110, 75), day), haze * 0.7)
         for y in range(GROUND):
             s.fill(mix(top, bot, y / GROUND), (0, y, LW, 1))
 
         if NIGHT > 0.25:
-            k = (NIGHT - 0.25) / 0.75 * (1 - smog) * (1 - self.cloud)
+            k = (NIGHT - 0.25) / 0.75 * (1 - smog) * (1 - self.cloud) * (1 - haze)
             for sx, sy, b in self.stars:
                 tw = 0.6 + 0.4 * math.sin(t * 2 + sx)
                 s.set_at((sx, sy), mix(mix(top, bot, sy / GROUND), (255, 255, 235), k * b * tw))
@@ -1553,6 +1756,7 @@ class World:
         cloud = mix(mix((255, 255, 255), (250, 190, 170), dusk * 0.6), (55, 58, 85), NIGHT)
         cloud = mix(cloud, (170, 160, 145), smog)
         cloud = mix(cloud, mix((110, 115, 125), (35, 37, 48), 1.0 - day), self.cloud * 0.8)
+        cloud = mix(cloud, mix((40, 34, 34), (95, 85, 82), day), haze * 0.7)
         puff = int(self.cloud * 3)
         for cx, cy, size, _ in self.clouds:
             for i in range(size):
@@ -1563,8 +1767,17 @@ class World:
         pygame.draw.polygon(s, far_col, self.far + [(LW + 40, GROUND), (-40, GROUND)])
         if self.flash > 0.5 and self.bolt:
             pygame.draw.lines(s, (255, 255, 225), False, self.bolt)
+        for bx, age in self.booms:      # shells bursting on the far hills
+            k = age / 0.7
+            by = int(self.ridge_y(self.far, bx)) - 2
+            pygame.draw.circle(s, mix((255, 210, 120), far_col, k), (int(bx), by), int(2 + k * 5))
+            if k < 0.3:
+                s.fill((255, 240, 190), (int(bx), by - 6, 1, 6))
         if ef > 6.8:
-            n = int(len(self.turbines) * clamp((ef - 6.8) * 2.5))
+            standing = 1.0
+            if self.fallen:     # the turbines on the hills come down too
+                standing = 1 - self.fall if self.ending == "war" else 1 - smooth(0.0, 0.6, wild)
+            n = int(len(self.turbines) * clamp((ef - 6.8) * 2.5) * standing)
             for tx in self.turbines[:n]:
                 ty = int(self.ridge_y(self.far, tx))
                 pole = sh((235, 238, 240), 0.6)
@@ -1574,14 +1787,17 @@ class World:
                     pygame.draw.line(s, pole, (tx, ty - 16), (tx + math.cos(a) * 7, ty - 16 + math.sin(a) * 7))
                 if NIGHT > 0.4 and int(t + tx) % 2:
                     s.set_at((tx, ty - 17), (255, 50, 50))
-        near_col = mix((80, 135, 75), (110, 120, 105), min(1, era / 7) * 0.5)
+        land = 0 if wild > 0 else era      # how built-up the land looks: back to wild grass as nature returns
+        near_col = mix((80, 135, 75), (110, 120, 105), min(1, era / 7) * 0.5 * (1 - wild))
         near_col = mix(near_col, (145, 125, 65), AUTUMN * 0.35)
         near_col = mix(sh(near_col, 0.75), sh((225, 230, 235), 0.75), SNOW * 0.85)
         pygame.draw.polygon(s, near_col, self.near + [(LW + 40, GROUND), (-40, GROUND)])
 
         # buildings
         for p in self.plots:
-            if p.kind == "nature":
+            if wild > 0:
+                draw_overgrown(s, p, t, wild)
+            elif p.kind == "nature":
                 draw_nature(s, p, era, t)
             elif p.building:
                 draw_construction(s, p, t)
@@ -1589,9 +1805,9 @@ class World:
                 draw_ruins(s, p, t)
             else:
                 draw_building(s, p, t)
-        for i in self.burning:
+        for i in self.burning + list(self.war_fires):
             draw_flames(s, self.plots[i], t, i)
-        if 1.0 <= sf < 2.0 and NIGHT > 0.6 and era <= 5:     # fireflies among the trees on summer nights
+        if 1.0 <= sf < 2.0 and NIGHT > 0.6 and (era <= 5 or wild > 0.6):     # fireflies among the trees on summer nights
             for p in self.plots:
                 if p.kind == "nature":
                     R = random.Random(p.tree_seed)
@@ -1604,52 +1820,56 @@ class World:
 
         # sidewalk and road
         grass = mix(sh(mix((95, 150, 70), (150, 145, 70), AUTUMN * 0.4)), sh(SNOW_COLOR), SNOW)
-        if era <= 3:
+        if land <= 3:
             s.fill(grass, (0, GROUND, LW, ROAD_TOP - GROUND))
         else:
-            walk = sh((150, 140, 125) if era == 4 else (175, 175, 172))
+            walk = sh((150, 140, 125) if land == 4 else (175, 175, 172))
             s.fill(mix(walk, sh(SNOW_COLOR), SNOW * 0.5), (0, GROUND, LW, ROAD_TOP - GROUND))
             s.fill(sh((120, 115, 110)), (0, ROAD_TOP - 1, LW, 1))
         road_h = ROAD_BOT - ROAD_TOP
-        if era == 0:
+        if land == 0:
             s.fill(grass, (0, ROAD_TOP, LW, road_h))
             R = random.Random(5)
             for _ in range(LW // 6):
                 s.set_at((R.randrange(LW), ROAD_TOP + R.randrange(road_h)),
                          sh(R.choice([(240, 230, 90), (240, 240, 240), (200, 120, 200)])))
-        elif era == 1:
+        elif land == 1:
             s.fill(grass, (0, ROAD_TOP, LW, road_h))
             s.fill(mix(sh((150, 125, 85)), sh(SNOW_COLOR), SNOW * 0.6), (0, ROAD_TOP + 6, LW, 5))
-        elif era <= 3:
+        elif land <= 3:
             s.fill(mix(sh((145, 115, 78)), sh(SNOW_COLOR), SNOW * 0.6), (0, ROAD_TOP, LW, road_h))
             s.fill(sh((125, 98, 65)), (0, ROAD_TOP + 5, LW, 1))
             s.fill(sh((125, 98, 65)), (0, ROAD_BOT - 5, LW, 1))
-        elif era == 4:
+        elif land == 4:
             s.fill(sh((120, 112, 102)), (0, ROAD_TOP, LW, road_h))
             cobble = sh((100, 94, 88))
             for yy in range(ROAD_TOP + 1, ROAD_BOT, 3):
                 for xx in range((yy % 2) * 2, LW, 4):
                     s.set_at((xx, yy), cobble)
         else:
-            s.fill(sh((72, 72, 78) if era == 5 else (55, 56, 62)), (0, ROAD_TOP, LW, road_h))
-            line = sh((230, 200, 80) if era == 5 else (235, 235, 235))
+            s.fill(sh((72, 72, 78) if land == 5 else (55, 56, 62)), (0, ROAD_TOP, LW, road_h))
+            line = sh((230, 200, 80) if land == 5 else (235, 235, 235))
             for xx in range(0, LW, 10):
                 s.fill(line, (xx, ROAD_TOP + 8, 5, 1))
-            if era >= 7:
+            if land >= 7:
                 s.fill(sh((70, 160, 95)), (0, ROAD_BOT - 2, LW, 2))
 
         # rail / grass strip / water
         s.fill(mix(grass, sh((115, 95, 65)), self.mud * 0.8), (0, ROAD_BOT, LW, WATER_Y - ROAD_BOT))
-        if era >= 4:
+        if land >= 4:
             for xx in range(0, LW, 4):
                 s.fill(sh((110, 80, 55)), (xx, RAIL_Y, 2, 2))
-            s.fill(sh((150, 150, 160) if era < 7 else (190, 200, 210)), (0, RAIL_Y, LW, 1))
+            s.fill(sh((150, 150, 160) if land < 7 else (190, 200, 210)), (0, RAIL_Y, LW, 1))
+        if wild > 0:        # what's left of the pavements, road, railway and lamp posts, grassing over
+            for rect, col, gone in remnants(LW):
+                if gone > wild:
+                    s.fill(sh(col), rect)
         for g in sorted(self.grazers, key=lambda g: g["y"]):
             draw_grazer(s, g, t)
         water = mix(sh(mix(bot, (30, 90, 130), 0.55), 0.5), (130, 115, 90), smog * 0.5)
         for y in range(WATER_Y, LH):
             s.fill(mix(water, mix(water, (5, 10, 25), 0.6), (y - WATER_Y) / (LH - WATER_Y)), (0, y, LW, 1))
-        s.fill(sh((170, 160, 130) if era < 5 else (160, 160, 165)), (0, WATER_Y, LW, 2))
+        s.fill(sh((170, 160, 130) if era < 5 or wild > 0.5 else (160, 160, 165)), (0, WATER_Y, LW, 2))
         flood = self.flood_level()
         if flood > 0:       # the river has risen over the bank and the railway
             rise = int(flood * (WATER_Y - ROAD_BOT + 1))
@@ -1663,22 +1883,23 @@ class World:
             s.fill(mix(water, (255, 255, 255), 0.25 * (1 - NIGHT * 0.6)), (sx, sy, 3, 1))
         if NIGHT > 0.2:
             for p in self.plots:
-                if p.kind != "nature" and p.level >= 4 and not p.building:
+                if p.kind != "nature" and p.level >= 4 and not p.building and not p.ruined and wild == 0:
                     for k in range(5):
                         rx = p.x + p.w // 2 + int(math.sin(t * 3 + k * 1.7 + p.x) * 2)
                         ry = WATER_Y + 4 + k * 5 + int(math.sin(t * 2 + k) * 1)
                         s.fill(mix(water, (255, 210, 130), 0.45 * NIGHT), (rx - 1, ry, 3, 1))
 
         # street lamps
-        if era >= 4:
+        if land >= 4:
+            lit = 0.0 if self.fallen else NIGHT      # the power is off once the city falls
             for lx in range(8, LW, 30):
                 pole = sh((60, 60, 65))
-                if NIGHT > 0.2:
-                    pygame.draw.ellipse(s, mix(s.get_at((lx, ROAD_TOP + 2))[:3], (255, 230, 170), 0.4 * NIGHT),
+                if lit > 0.2:
+                    pygame.draw.ellipse(s, mix(s.get_at((lx, ROAD_TOP + 2))[:3], (255, 230, 170), 0.4 * lit),
                                         (lx - 6, ROAD_TOP - 1, 13, 5))
                 s.fill(pole, (lx, ROAD_TOP - 11, 1, 11))
                 s.fill(pole, (lx, ROAD_TOP - 11, 3, 1))
-                s.fill(mix(sh((200, 200, 190)), (255, 230, 150), NIGHT), (lx + 2, ROAD_TOP - 10, 1, 1))
+                s.fill(mix(sh((200, 200, 190)), (255, 230, 150), lit), (lx + 2, ROAD_TOP - 10, 1, 1))
 
         if self.festival > 0:
             self.draw_festival(s, era, t)
@@ -1730,6 +1951,8 @@ class World:
         if self.flash > 0:
             v = int(self.flash * 60)
             s.fill((v, v, v), special_flags=pygame.BLEND_RGB_ADD)
+        if self.blast > 0:      # the glow of a strike lights up the whole town
+            s.fill((int(self.blast * 70), int(self.blast * 32), int(self.blast * 8)), special_flags=pygame.BLEND_RGB_ADD)
         if self.hardship == "plague":     # a sickly, quiet tint over the town
             k = clamp(min((45.0 - self.hard_t) / 5, self.hard_t / 5, 1.0))
             s.fill((int(255 - 50 * k), int(255 - 35 * k), int(255 - 60 * k)), special_flags=pygame.BLEND_RGB_MULT)
@@ -1774,7 +1997,7 @@ def load_world(lw, era_seconds):
     if best is None:
         return None
     world, saved_lw = best["world"], best["lw"]
-    world.t = world.era_f * era_seconds     # keep the same era if --era-minutes changed
+    world.t = world.born + world.age * era_seconds     # keep the same era if --era-minutes changed
     world.era_seconds = era_seconds
     return world, saved_lw
 
@@ -1786,7 +2009,8 @@ def saved_city_summary():
             world = pickle.load(f)["world"]
     except Exception:
         return None
-    return f"{ERAS[int(world.era_f)]}, year {fmt_year(world.year())}"
+    text = world.stage() if world.fallen else f"{world.stage()}, year {fmt_year(world.year())}"
+    return text + (f" (city no. {world.cycle})" if world.cycle > 1 else "")
 
 
 def load_settings():
@@ -1795,6 +2019,14 @@ def load_settings():
             return json.load(f)
     except Exception:
         return {}
+
+
+def saved_ending(settings):
+    """How a city ends, from the settings (older settings only said whether to start over)."""
+    ending = settings.get("ending")
+    if ending in ENDINGS:
+        return ending
+    return "war" if settings.get("restart", True) else "keep"
 
 
 def save_settings(settings):
@@ -1853,20 +2085,22 @@ def configure():
     total = ttk.Label(frame, foreground="#666")
     total.grid(row=3, column=0, columnspan=2, sticky="w", pady=(4, 14))
 
-    restart = tk.BooleanVar(value=settings.get("restart", True))
-    ttk.Checkbutton(frame, text="Start over after Green Future", variable=restart).grid(
-        row=4, column=0, columnspan=2, sticky="w", pady=(0, 14))
+    ttk.Label(frame, text="After Green Future").grid(row=4, column=0, sticky="w", pady=(0, 14))
+    ending_keys = {label: key for key, label in ENDINGS.items()}
+    ending = tk.StringVar(value=ENDINGS[saved_ending(settings)])
+    ttk.Combobox(frame, textvariable=ending, values=list(ENDINGS.values()), state="readonly", width=32).grid(
+        row=4, column=1, sticky="e", padx=(16, 0), pady=(0, 14))
 
     def show_total(*_):
         m = minutes[era.get()]
         text = f"Green Future after about {fmt_minutes(m * (len(ERAS) - 1))} of idle time"
-        if restart.get():
-            text += f",\nthen a new city begins {fmt_minutes(m * GREEN_ERAS)} later."
+        if ending_keys[ending.get()] != "keep":
+            text += f",\nthen the city falls and a new one begins {fmt_minutes(m * (GREEN_ERAS + WAR_ERAS + WILD_ERAS))} later."
         else:
             text += "."
         total.config(text=text)
     era.trace_add("write", show_total)
-    restart.trace_add("write", show_total)
+    ending.trace_add("write", show_total)
     show_total()
 
     city_box = ttk.LabelFrame(frame, text="Your city", padding=10)
@@ -1891,7 +2125,8 @@ def configure():
 
     def ok(*_):
         settings["era_minutes"] = minutes[era.get()]
-        settings["restart"] = restart.get()
+        settings["ending"] = ending_keys[ending.get()]
+        settings.pop("restart", None)
         try:
             save_settings(settings)
         except OSError as e:
@@ -2034,13 +2269,15 @@ def preview(parent):
     canvas, small = pygame.Surface((LW, LH)), pygame.Surface((w, h))
     msg = wintypes.MSG()
     world = None
+    ending = saved_ending(load_settings())
     last = time.perf_counter()
     while user32.IsWindow(child) and user32.IsWindow(parent):
         while user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1):     # PM_REMOVE
             user32.TranslateMessage(ctypes.byref(msg))
             user32.DispatchMessageW(ctypes.byref(msg))
-        if world is None or world.t > world.era_seconds * len(ERAS):
+        if world is None or (ending == "keep" and world.age > len(ERAS)):
             world = World(8.0)          # every era lasts 8 seconds in the preview
+            world.set_ending(ending)
             while world.t < world.era_seconds * 1.5:     # start with the first huts already up
                 world.update(0.1)
         now = time.perf_counter()
@@ -2090,6 +2327,7 @@ def run(args):
         LW, views = split_views(rects, LW)
     else:
         world = World(args.era_minutes * 60)
+    world.set_ending(args.ending)
     canvas = pygame.Surface((LW, LH))
     texture = Texture(renderer, (LW, LH), streaming=True)
     texture.blend_mode = 0      # the canvas has no alpha; copy it as is
@@ -2097,7 +2335,6 @@ def run(args):
     started = time.time()
     last_save = started
     fps = 20 if on_battery() else 30
-    restart_t = None        # seconds into the fade to a new city
     pygame.event.clear()
     start_mouse = pygame.mouse.get_pos()
 
@@ -2116,7 +2353,7 @@ def run(args):
                 if not args.window or e.key == pygame.K_ESCAPE:
                     running = False
                 elif e.key == pygame.K_RIGHT:
-                    world.t = (int(world.era_f) + 1) * world.era_seconds
+                    world.t = world.born + (int(world.age) + 1) * world.era_seconds
             elif not args.window and settled:
                 if e.type == pygame.MOUSEBUTTONDOWN:
                     running = False
@@ -2126,20 +2363,8 @@ def run(args):
             elif e.type == pygame.MOUSEMOTION:
                 start_mouse = e.pos
         world.update(dt)
-        if restart_t is None and args.restart and world.t >= world.era_seconds * (len(ERAS) - 1 + GREEN_ERAS):
-            restart_t = 0.0
-        light = 1.0
-        if restart_t is not None:       # fade to black, begin again from wilderness, fade back in
-            restart_t += dt
-            if restart_t >= 3.0 and world.t > world.era_seconds:
-                world = World(world.era_seconds)
-                save_world(world)
-            light = clamp(abs(restart_t - 3.0) / 3.0)
-            if restart_t >= 6.0:
-                restart_t = None
         world.draw(canvas)
         texture.update(canvas)
-        texture.color = (int(255 * light),) * 3
         renderer.draw_color = (0, 0, 0, 255)
         renderer.clear()
         for src, dst in views:
@@ -2216,9 +2441,11 @@ def main():
     ap.add_argument("--fast", action="store_true", help="demo speed: 15 seconds per era")
     ap.add_argument("--window", action="store_true", help="run in a window for testing")
     ap.add_argument("--new", action="store_true", help="forget the saved city and start from wilderness")
-    ap.add_argument("--no-restart", dest="restart", action="store_false",
-                    default=load_settings().get("restart", True),
-                    help="keep the finished city instead of starting over after Green Future")
+    ap.add_argument("--ending", choices=list(ENDINGS), default=saved_ending(load_settings()),
+                    help="after Green Future: war then nature returns, people move away then nature returns, "
+                         "or keep the city (default: from the settings window, else war)")
+    ap.add_argument("--no-restart", dest="ending", action="store_const", const="keep",
+                    help="same as --ending keep")
     ap.add_argument("--away-offset", type=float, default=0, help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.fast:

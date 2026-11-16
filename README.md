@@ -36,6 +36,8 @@ Wildlife changes with the eras too: wolf packs, bears and rabbits roam the wilde
 
 Now and then the city goes through hard times, and recovers. A fire can burn a building or two (from the Industrial Age a fire engine races in), leaving ruins that are soon rebuilt. The river can flood over its banks and stop the trains. In medieval and industrial times a plague can empty the streets for a while, and when it lifts, the town throws a festival.
 
+When Green Future has had its time, the city falls. War comes: jets cross a smoky sky, shells burst on the far hills, people flee and the towers burn down to broken shells. Then it goes quiet. Moss creeps over the rubble, grass pushes up through the cracked roads, young trees grow over the ruins, and the deer, wolves and bears come back. When the last of the road is gone, the land is wilderness again and a new city's story begins, laid out differently this time. If you'd rather not see a war, the people can simply move away instead, leaving the buildings to crumble before nature takes them back.
+
 The city also has a day and night cycle, with sunsets, stars, lit windows, smog that comes with industry and clears again later, boats on the river and traffic that changes with each era.
 
 ## Install on Windows
@@ -61,7 +63,7 @@ copy dist\TinyCity.exe dist\TinyCity.scr
 
 Then right-click `dist\TinyCity.scr`, choose **Install**, set how many idle minutes to wait, and click **OK**.
 
-To pick how long each era lasts, click **Settings** in the screen saver dialog. The same window shows how far your city has grown, has a button to start a new one, and lets you turn off starting over after Green Future if you'd rather keep your finished city.
+To pick how long each era lasts, click **Settings** in the screen saver dialog. The same window shows how far your city has grown, has a button to start a new one, and lets you choose what happens after Green Future: a war, people moving away, or keeping your finished city.
 
 ## Run it directly
 
@@ -74,7 +76,7 @@ python tiny_city.py --fast          every era lasts 15 seconds (demo)
 python tiny_city.py --watch         sit in the background, start after 5 idle minutes
 python tiny_city.py --watch --idle-minutes 10 --era-minutes 5
 python tiny_city.py --new           forget the saved city and start from wilderness
-python tiny_city.py --no-restart    keep the finished city instead of starting over after Green Future
+python tiny_city.py --ending peace  after Green Future people move away instead of a war (or: war, keep)
 python tiny_city.py --settings      open the settings window
 ```
 
