@@ -2337,6 +2337,7 @@ def run(args):
     fps = 20 if on_battery() else 30
     pygame.event.clear()
     start_mouse = pygame.mouse.get_pos()
+    fade = 0.0      # fade in from the black screen Windows shows while the screen saver starts
 
     running = True
     while running:
@@ -2367,6 +2368,8 @@ def run(args):
         world.update(dt)
         world.draw(canvas)
         texture.update(canvas)
+        fade = min(1.0, fade + dt / 1.2)
+        texture.color = (int(255 * smooth(0.0, 1.0, fade)),) * 3
         renderer.draw_color = (0, 0, 0, 255)
         renderer.clear()
         for src, dst in views:
