@@ -57,9 +57,10 @@ git clone https://github.com/derrickbarasa/evolution.git
 cd evolution
 py -m venv .venv
 .venv\Scripts\python.exe -m pip install pygame pyinstaller
-.venv\Scripts\python.exe -m PyInstaller --noconfirm TinyCity.spec
-copy dist\TinyCity.exe dist\TinyCity.scr
+.venv\Scripts\python.exe build.py
 ```
+
+This makes `dist\TinyCity.scr` (and the same file as `dist\TinyCity.exe`). It's a small launcher with the app packed inside. The first time it runs, it unpacks the app into `%LOCALAPPDATA%\TinyCity\app`, and after that it starts straight from there, so the screen saver starts and stops quickly.
 
 Then right-click `dist\TinyCity.scr`, choose **Install**, set how many idle minutes to wait, and click **OK**.
 

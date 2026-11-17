@@ -2362,6 +2362,8 @@ def run(args):
                         running = False
             elif e.type == pygame.MOUSEMOTION:
                 start_mouse = e.pos
+        if not running:
+            break
         world.update(dt)
         world.draw(canvas)
         texture.update(canvas)
@@ -2370,9 +2372,11 @@ def run(args):
         for src, dst in views:
             texture.draw(srcrect=src, dstrect=dst)
         renderer.present()
+    # Get off the screen at once so Windows can go straight to the lock screen, then save and leave
+    # without the slow tidy-up of pygame and Python (the operating system frees everything anyway).
+    win.hide()
     save_world(world)
-    win.destroy()
-    pygame.quit()
+    os._exit(0)
 
 
 def idle_seconds():
